@@ -18,7 +18,7 @@ if __name__ == "__main__":
     # Setup logging system
     logger = setup_logging(log_dir="logs")
     app_reporter = ApplicationReporter(output_dir=CONFIG["output_dir"])
-    
+
     # Log startup
     app_reporter.log_startup()
     
@@ -50,12 +50,12 @@ if __name__ == "__main__":
     n_strategies = 8
     n_thresholds = len(CONFIG['probability_thresholds'])
     n_cpu = cpu_count()
-    
+
     # Auto-calculate optimal workers to avoid CPU Over-subscription
     # For nested parallelization: algo_workers * fold_workers <= n_cpu
     algo_workers = min(n_algorithms, max(1, n_cpu // 2))
     fold_workers = max(1, n_cpu // algo_workers)
-    
+
     parallelization = {
         "algorithm_selection": algo_workers, 
         "fold_evaluation": fold_workers,      
@@ -95,14 +95,16 @@ if __name__ == "__main__":
 
 """TODOs"""
 
+"""Rewrite the code to my own vision"""
 """Final purchase gate adjustments needs to work, strategies can change their threshold, it should be in a layer after that"""
 """Should be deterministic, always needs to converge"""
-"""Compare again to paper, there could be usefull insights"""
 """What is the difference between folder and package and library ?"""
-"""Create test files"""
-"""Rewrite the code to my own vision"""
+"""Better test files, now is just random functions, need to centralize in a single testing framework, now is desorganized"""
 """Create output folder if it doesnt exist"""
 """Change README, this is now the quant fund engine"""
+"""Volatily weight funciona funciona com o full alocation ? ele ta pulando essa etapa ? """
+"""Try external backtest engine"""
+"""Test other evaluation metrics, dont need to be just final backtesting results"""
 
 """Future testing"""
 
@@ -114,10 +116,10 @@ if __name__ == "__main__":
 """Validation fine tunning, find right number of windows days..."""
 """Change strategies parameters to optimize"""
 """Models parameter tuning/more features ?"""
+"""Compare again to paper, there could be usefull insights"""
 
 """Future improvements"""
 
 """Possible signal decomposotion"""
 """Eigen portfolios pca ?"""
 """Encapsulating framework"""
-"""Other low level languages for speed"""
