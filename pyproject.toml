@@ -5,22 +5,34 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "quantfund_engine"
 version = "0.1.0"
-description = "Quant Fund Engine"
+description = "Private ML backtesting engine for portfolio research and strategy evaluation"
 readme = "README.md"
 requires-python = ">=3.9"
+keywords = ["backtesting", "ml", "trading", "quantitative", "portfolio"]
+classifiers = [
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Financial and Insurance Industry",
+]
 dependencies = [
-    "pandas",
-    "numpy",
-    "scikit-learn",
-    "matplotlib",
-    "seaborn",
-    "yfinance",
-    "scipy"
+    "pandas>=1.0",
+    "numpy>=1.20",
+    "scikit-learn>=1.0",
+    "matplotlib>=3.0",
+    "seaborn>=0.11",
+    "yfinance>=0.1.70",
+    "scipy>=1.5"
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest",
-    "black",
-    "flake8"
+    "pytest>=7.0",
+    "black>=22.0",
+    "flake8>=4.0"
 ]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["engine*"]
