@@ -1,5 +1,5 @@
 from sklearn.svm import SVC
-from services.algorithms.base import BaseScikitClassificationAlgorithm
+from engine.algorithms.base import BaseScikitClassificationAlgorithm
 
 class SVCAlgorithm(BaseScikitClassificationAlgorithm):
     def __init__(self, kernel="linear", random_state=42, probability=True, 

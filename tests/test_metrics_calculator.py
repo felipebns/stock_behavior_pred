@@ -1,7 +1,7 @@
 import pytest
 import numpy as np
 import pandas as pd
-from services.backtesting.metrics_calculator import MetricsCalculator
+from engine.backtesting.metrics_calculator import MetricsCalculator
 
 def test_max_drawdown():
     """Ensure Max Drawdown calculates the deepest valley from peak."""

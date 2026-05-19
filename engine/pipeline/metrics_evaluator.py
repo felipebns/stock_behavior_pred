@@ -4,7 +4,7 @@ from typing import Dict
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 from scipy.stats import spearmanr
 
-from services.algorithms.base import Algorithm
+from engine.algorithms.base import Algorithm
 
 
 class MetricsEvaluator:

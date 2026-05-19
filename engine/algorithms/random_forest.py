@@ -1,5 +1,5 @@
 from sklearn.ensemble import RandomForestClassifier
-from services.algorithms.base import BaseScikitClassificationAlgorithm
+from engine.algorithms.base import BaseScikitClassificationAlgorithm
 
 class RandomForestAlgorithm(BaseScikitClassificationAlgorithm):
     def __init__(self, n_estimators=100, random_state=42, class_weight="balanced", 

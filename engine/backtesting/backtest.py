@@ -5,13 +5,13 @@ import concurrent.futures
 from typing import Dict, Optional
 from concurrent.futures import ProcessPoolExecutor
 
-from services.backtesting.metrics_calculator import MetricsCalculator
-from services.backtesting.allocation_manager import AllocationManager
-from services.backtesting.return_calculator import ReturnCalculator
-from services.plotting.plot_generator import PlotGenerator
-from services.log.logger_config import get_logger
-from services.log.reporters import BacktestReporter
-from services.strategies import (
+from engine.backtesting.metrics_calculator import MetricsCalculator
+from engine.backtesting.allocation_manager import AllocationManager
+from engine.backtesting.return_calculator import ReturnCalculator
+from engine.plotting.plot_generator import PlotGenerator
+from engine.log.logger_config import get_logger
+from engine.log.reporters import BacktestReporter
+from engine.strategies import (
     MomentumStrategy, MeanReversionStrategy, 
     VolatilityWeightedStrategy, EnsembleSmartStrategy,
     ThresholdStrategy, BuyAndHoldStrategy, FixedIncomeStrategy,
@@ -185,8 +185,7 @@ class Backtest:
         
         return result
     
-    
-    def save_summary(self, backtest_results: Dict, output_dir: str) -> None:
+    def save_summary(self, backtest_results: Dict) -> None:
         """Save backtest summary to JSON using reporter."""
         self.reporter.save_summary(backtest_results)
     

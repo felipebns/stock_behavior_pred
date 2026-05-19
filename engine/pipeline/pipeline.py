@@ -2,15 +2,15 @@ import pandas as pd
 import time
 from pathlib import Path
 from typing import Tuple, Dict, Any
-from services.pipeline.model_selector import ModelSelector
-from services.pipeline.metrics_evaluator import MetricsEvaluator
-from services.log.reporters import PipelineReporter
-from services.backtesting import Backtest
-from services.plotting.plot_generator import PlotGenerator
-from services.stock.stock import Stock
-from services.stock.transform import FeatureEngineer
-from services.algorithms.base import Algorithm
-from services.log.logger_config import get_logger
+from engine.pipeline.model_selector import ModelSelector
+from engine.pipeline.metrics_evaluator import MetricsEvaluator
+from engine.log.reporters import PipelineReporter
+from engine.backtesting import Backtest
+from engine.plotting.plot_generator import PlotGenerator
+from engine.stock.stock import Stock
+from engine.stock.transform import FeatureEngineer
+from engine.algorithms.base import Algorithm
+from engine.log.logger_config import get_logger
 
 
 class Pipeline:
@@ -255,7 +255,7 @@ class Pipeline:
         
         # Save and plot
         self.logger.info("Saving backtest summary...")
-        backtest.save_summary(results, str(self.output_dir))
+        backtest.save_summary(results)
         
         self.logger.info("Generating backtest visualizations...")
         backtest.plot_results(results, str(self.output_dir))

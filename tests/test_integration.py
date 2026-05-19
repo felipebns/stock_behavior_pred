@@ -2,9 +2,9 @@ import pytest
 import pandas as pd
 import numpy as np
 from unittest.mock import MagicMock
-from services.pipeline.pipeline import Pipeline
-from services.algorithms.logistic_regression import LogisticRegressionAlgorithm
-from services.stock.stock import Stock
+from engine.pipeline.pipeline import Pipeline
+from engine.algorithms.logistic_regression import LogisticRegressionAlgorithm
+from engine.stock.stock import Stock
 
 class MockStock(Stock):
     def __init__(self):

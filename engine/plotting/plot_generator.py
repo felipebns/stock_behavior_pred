@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import numpy as np
 from typing import Dict
@@ -58,9 +59,11 @@ class PlotGenerator:
         return selected
 
     def plot_model_metrics_comparison(self, model_results: Dict[str, Dict], output_dir: str) -> None:
+        os.makedirs(output_dir, exist_ok=True)
         self.model_metrics_plotter.plot_model_metrics_comparison(model_results, output_dir)
         
     def plot_all(self, backtest_results: Dict, test_df: pd.DataFrame, output_dir: str) -> None:
+        os.makedirs(output_dir, exist_ok=True)
         """Generate all backtest plots."""
         dates = np.sort(test_df["date"].unique())
         

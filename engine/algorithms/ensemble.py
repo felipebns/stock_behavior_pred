@@ -1,7 +1,7 @@
 from sklearn.ensemble import VotingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
-from services.algorithms.base import BaseScikitClassificationAlgorithm
+from engine.algorithms.base import BaseScikitClassificationAlgorithm
 
 class EnsembleClassificationAlgorithm(BaseScikitClassificationAlgorithm):
     """Hybrid Ensemble using params from config, not hardcoded.

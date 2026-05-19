@@ -1,7 +1,7 @@
 import pytest
 import pandas as pd
 import numpy as np
-from services.backtesting.position_normalizer import PositionNormalizer
+from engine.backtesting.position_normalizer import PositionNormalizer
 
 def test_full_deployment_success():
     """Test standard normalization where entire portfolio is divided among selected stocks."""

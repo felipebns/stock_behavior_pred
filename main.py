@@ -1,17 +1,17 @@
 from multiprocessing import cpu_count
 from datetime import datetime, timezone
-from services.reproducibility import ReproducibilityManager
+from engine.reproducibility import ReproducibilityManager
 
 ReproducibilityManager.setup_reproducibility(seed=42)
 
-from services.stock.stock import Stock
-from services.pipeline import Pipeline
-from services.algorithms.svc import SVCAlgorithm
-from services.algorithms.random_forest import RandomForestAlgorithm
-from services.algorithms.ensemble import EnsembleClassificationAlgorithm
-from services.algorithms.logistic_regression import LogisticRegressionAlgorithm
-from services.log.logger_config import setup_logging, get_logger
-from services.log.reporters import ApplicationReporter
+from engine.stock.stock import Stock
+from engine.pipeline import Pipeline
+from engine.algorithms.svc import SVCAlgorithm
+from engine.algorithms.random_forest import RandomForestAlgorithm
+from engine.algorithms.ensemble import EnsembleClassificationAlgorithm
+from engine.algorithms.logistic_regression import LogisticRegressionAlgorithm
+from engine.log.logger_config import setup_logging, get_logger
+from engine.log.reporters import ApplicationReporter
 from config.config import CONFIG
 
 if __name__ == "__main__":
@@ -96,14 +96,10 @@ if __name__ == "__main__":
 """TODOs"""
 
 """Rewrite the code to my own vision"""
-"""Final purchase gate adjustments needs to work, strategies can change their threshold, it should be in a layer after that"""
 """Should be deterministic, always needs to converge"""
-"""What is the difference between folder and package and library ?"""
+"""Final purchase gate adjustments needs to work, strategies can change their threshold, it should be in a layer after that"""
 """Better test files, now is just random functions, need to centralize in a single testing framework, now is desorganized"""
-"""Create output folder if it doesnt exist"""
-"""Change README, this is now the quant fund engine"""
 """Volatily weight funciona funciona com o full alocation ? ele ta pulando essa etapa ? """
-"""Try external backtest engine"""
 """Test other evaluation metrics, dont need to be just final backtesting results"""
 
 """Future testing"""
@@ -122,4 +118,12 @@ if __name__ == "__main__":
 
 """Possible signal decomposotion"""
 """Eigen portfolios pca ?"""
-"""Encapsulating framework"""
+"""Encapsulating framework, finish .toml, put name, license, email, etc"""
+
+
+
+"""
+Notes:
+
+It doesnt make sense to use external backtesting engine, it is way to customized right now, very specific
+"""

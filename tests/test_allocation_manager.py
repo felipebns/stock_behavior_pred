@@ -1,7 +1,7 @@
 import pytest
 import pandas as pd
 import numpy as np
-from services.backtesting.allocation_manager import AllocationManager
+from engine.backtesting.allocation_manager import AllocationManager
 
 def test_top_k_selection():
     """Verify that only the top K probability positions are kept, others zeroed."""

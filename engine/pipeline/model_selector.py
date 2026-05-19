@@ -5,9 +5,9 @@ import numpy as np
 from typing import Tuple, Dict
 from concurrent.futures import ProcessPoolExecutor
 
-from services.validation.walk_forward_validator import WalkForwardValidator
-from services.algorithms.base import Algorithm
-from services.log.logger_config import get_logger
+from engine.validation.walk_forward_validator import WalkForwardValidator
+from engine.algorithms.base import Algorithm
+from engine.log.logger_config import get_logger
 
 
 class ModelSelector:

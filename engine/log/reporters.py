@@ -3,7 +3,7 @@ import numpy as np
 import json
 from pathlib import Path
 from typing import Dict, List
-from services.log.logger_config import get_logger
+from engine.log.logger_config import get_logger
 
 
 class BaseReporter:

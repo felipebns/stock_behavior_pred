@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from services.log.logger_config import get_logger
+from engine.log.logger_config import get_logger
 
 logger = get_logger()
 
