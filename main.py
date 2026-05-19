@@ -101,6 +101,9 @@ if __name__ == "__main__":
 """Better test files, now is just random functions, need to centralize in a single testing framework, now is desorganized"""
 """Volatily weight funciona funciona com o full alocation ? ele ta pulando essa etapa ? """
 """Test other evaluation metrics, dont need to be just final backtesting results"""
+"""Mudar interface de config/main/paralelização, pode ficar mais claro, passar apenas config para pipeline ? abstrair parametros de paralel ? """
+"""Separamento de tickers correto ? estou analizando df corretamente com as features separadas ?"""
+"""Log de linhas faltando no stock"""
 
 """Future testing"""
 
