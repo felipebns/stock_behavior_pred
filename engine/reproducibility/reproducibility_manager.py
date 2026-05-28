@@ -24,3 +24,13 @@ class ReproducibilityManager:
         
         # Joblib (scikit-learn parallelization)
         os.environ['JOBLIB_RANDOM_SEED'] = str(seed)
+
+        # PyTorch (optional)
+        try:
+            import torch
+
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
+        except Exception:
+            pass

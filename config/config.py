@@ -34,8 +34,7 @@ CONFIG = {
     "probability_thresholds": [0.50, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59, 0.60],  # Thresholds to test for position sizing
     "position_sizing": "probability_weighted",  # "equal_weight" or "probability_weighted"
 
-    # Feature engineering parameters (placeholder for future extensions)
-    "feature_profile": "classification_indicators",
+    # Feature engineering parameters
     "lookback_period": 20,
 
     # ================== POSITION SELECTION ==================
@@ -72,32 +71,15 @@ CONFIG = {
     "allocation_mode": "full_deployment",
     "purchase_threshold": 0.50,
 
-    # Model hyperparameters
-    "model_params": {
-        "LogisticRegression": {
-            "random_state": 42,
-            "max_iter": 1000,
-            "class_weight": "balanced",
-            "C": 1.0,
-        },
-        "SVC": {
-            "kernel": "linear",
-            "random_state": 42,
-            "probability": True,
-            "class_weight": "balanced",
-            "C": 10.0,  # Increased regularization to improve convergence
-            "max_iter": 2000,  # Standard limit; convergence improved by higher C
-        },
-        "RandomForest": {
-            "n_estimators": 100,
-            "random_state": 42,
-            "class_weight": "balanced",
-            "max_depth": None,
-            "n_jobs": -1,
-        },
-        "Ensemble": {
-            # Ensemble uses sub-models, so individual params not directly used
-            "voting": "soft",
-        }
+    # LSTM hyperparameters (small defaults)
+    "lstm_params": {
+        "hidden_size": 32,
+        "num_layers": 1,
+        "dropout": 0.1,
+        "lr": 0.001,
+        "epochs": 10,
+        "batch_size": 64,
+        "device": "auto",
+        "seed": 42,
     }
 }

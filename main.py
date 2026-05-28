@@ -6,10 +6,7 @@ ReproducibilityManager.setup_reproducibility(seed=42)
 
 from engine.stock.stock import Stock
 from engine.pipeline import Pipeline
-from engine.algorithms.svc import SVCAlgorithm
-from engine.algorithms.random_forest import RandomForestAlgorithm
-from engine.algorithms.ensemble import EnsembleClassificationAlgorithm
-from engine.algorithms.logistic_regression import LogisticRegressionAlgorithm
+from engine.algorithms.lstm import LSTMAlgorithm
 from engine.log.logger_config import setup_logging, get_logger
 from engine.log.reporters import ApplicationReporter
 from config.config import CONFIG
@@ -29,47 +26,34 @@ if __name__ == "__main__":
     stock = Stock(tickers=CONFIG["tickers"], start=CONFIG["start_date"], end=end_date)
 
     # Log algorithms initialization
-    model_names = ['Logistic Regression', 'Support Vector Classifier', 'Random Forest', 'Hybrid Ensemble']
+    model_names = ["LSTM"]
     app_reporter.log_algorithms_initialization(model_names)
-    models = [
-        LogisticRegressionAlgorithm(**CONFIG["model_params"]["LogisticRegression"]),
-        SVCAlgorithm(**CONFIG["model_params"]["SVC"]),
-        RandomForestAlgorithm(**CONFIG["model_params"]["RandomForest"]),
-        EnsembleClassificationAlgorithm(
-            lr_params=CONFIG["model_params"]["LogisticRegression"],
-            svc_params=CONFIG["model_params"]["SVC"],
-            rf_params=CONFIG["model_params"]["RandomForest"],
-        )
-    ]
+    model = LSTMAlgorithm(
+        lookback=CONFIG["lookback_period"],
+        **CONFIG["lstm_params"],
+    )
 
     # Log configuration
     app_reporter.log_configuration(CONFIG)
     
     # Calculate parallelization settings automatically based on CPU count
-    n_algorithms = 4
     n_strategies = 8
     n_thresholds = len(CONFIG['probability_thresholds'])
     n_cpu = cpu_count()
 
-    # Auto-calculate optimal workers to avoid CPU Over-subscription
-    # For nested parallelization: algo_workers * fold_workers <= n_cpu
-    algo_workers = min(n_algorithms, max(1, n_cpu // 2))
-    fold_workers = max(1, n_cpu // algo_workers)
-
     parallelization = {
-        "algorithm_selection": algo_workers, 
-        "fold_evaluation": fold_workers,      
+        "fold_evaluation": max(1, min(4, n_cpu)),
         "threshold_testing": max(1, n_cpu - 1),  # We can use all CPUs for the final backtest (leaving 1 for OS)
     }
     CONFIG["parallelization"] = parallelization
     
     # Log backtesting plan and parallelization
     app_reporter.log_backtesting_plan(n_strategies, n_thresholds)
-    app_reporter.log_parallelization(n_algorithms, n_strategies, n_thresholds, parallelization, n_cpu)
+    app_reporter.log_parallelization(n_strategies, n_thresholds, parallelization, n_cpu)
 
     pipeline = Pipeline(
         stock=stock, 
-        algorithms=models, 
+        algorithm=model, 
         output_dir=CONFIG["output_dir"],
         test_size=CONFIG["test_size"],
         wfv_train_window=CONFIG["wfv_train_window"],
@@ -97,7 +81,6 @@ if __name__ == "__main__":
 
 """Rewrite the code to my own vision"""
 """Should be deterministic, always needs to converge"""
-"""Remove multiple ML models, 1 nm. 1 merge of strategy, need to analyse market to change strategy dynamically"""
 """Final purchase gate adjustments needs to work, strategies can change their threshold, it should be in a layer after that"""
 """Better test files, now is just random functions, need to centralize in a single testing framework, now is desorganized"""
 """Volatily weight funciona funciona com o full alocation ? ele ta pulando essa etapa ? """
@@ -109,7 +92,6 @@ if __name__ == "__main__":
 
 """Test what is more effective, full deployment or cash fallbacks"""
 """Stocks selection, more than 5 causes overfitting, need to think of a way to get "similar" stocks to diversify"""
-"""Test different algorithms (possible deep learning ? LSTM, CNN, GRU, XGBoost, etc.)"""
 """Explore more probabilities to chose best ML model, using strategy, etc. (not only IC)"""
 """Test more buy/sell strategies | Test more averages for mean reversion"""
 """Validation fine tunning, find right number of windows days..."""

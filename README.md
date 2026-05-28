@@ -1,6 +1,6 @@
 # QuantFund Engine
 
-ML backtesting engine focused on model selection, strategy evaluation, portfolio allocation, and report generation. 
+ML backtesting engine focused on walk-forward validation, strategy evaluation, portfolio allocation, and report generation. 
 
 ## Quick Start
 
@@ -17,7 +17,7 @@ python main.py
 End-to-end pipeline for daily, long-only portfolio research and backtesting:
 
 1. **Data preparation and feature engineering**
-2. **Model selection** via walk-forward validation
+2. **Walk-forward validation** to measure model stability
 3. **Model training** on the best configuration
 4. **Backtesting** with multiple strategies and probability thresholds
 5. **Reporting and plotting** of results
@@ -34,10 +34,9 @@ This is designed to be modular so you can swap models, strategies, assets, and a
 - Build a binary target for next-day direction
 - Temporal split into train/test
 
-### Phase 1: Model Selection (Walk-Forward Validation)
+### Phase 1: Walk-Forward Validation
 - Rolling window validation with fixed train/test sizes
-- Selection metric: Information Coefficient (IC) on out-of-sample returns
-- Best model chosen by robustness score (mean IC minus IC volatility)
+- Primary metric: Information Coefficient (IC) on out-of-sample returns
 
 ### Phase 2: Full Training
 - Train the selected model on the full training window
@@ -48,7 +47,7 @@ This is designed to be modular so you can swap models, strategies, assets, and a
 - Apply transaction costs, slippage, and capital allocation rules
 
 ### Phase 4: Reporting and Plotting
-- Persist model comparison and backtest summary JSON
+- Persist backtest summary JSON
 - Generate equity curves and strategy comparison plots
 
 ---
@@ -56,15 +55,15 @@ This is designed to be modular so you can swap models, strategies, assets, and a
 ## Core Components
 
 ### Models
-Implement the `Algorithm` interface and provide:
+The LSTM model implements the `Algorithm` interface and provides:
 - `fit`, `predict`, `predict_proba`
-- `name` and `feature_profile`
+- `name`
 
-Models live under [services/algorithms](services/algorithms).
+Models live under [engine/algorithms](engine/algorithms).
 
 ### Strategies
 Strategies modify the raw model signal (probability + threshold) with market conditions.
-They live under [services/strategies](services/strategies) and implement `BaseStrategy.apply`.
+They live under [engine/strategies](engine/strategies) and implement `BaseStrategy.apply`.
 
 ### Allocation
 Allocation is handled by a three-step pipeline:
@@ -72,8 +71,8 @@ Allocation is handled by a three-step pipeline:
 2. Probability weighting (optional)
 3. Normalization with allocation mode and confidence gate
 
-See [services/backtesting/allocation_manager.py](services/backtesting/allocation_manager.py) and
-[services/backtesting/position_normalizer.py](services/backtesting/position_normalizer.py).
+See [engine/backtesting/allocation_manager.py](engine/backtesting/allocation_manager.py) and
+[engine/backtesting/position_normalizer.py](engine/backtesting/position_normalizer.py).
 
 ### Backtesting
 The backtesting engine runs strategy/threshold grids and produces:
@@ -81,15 +80,15 @@ The backtesting engine runs strategy/threshold grids and produces:
 - Total return, Sharpe, max drawdown, hit rate
 - Per-ticker position summaries
 
-Core logic: [services/backtesting/backtest.py](services/backtesting/backtest.py),
-[services/backtesting/metrics_calculator.py](services/backtesting/metrics_calculator.py),
-[services/backtesting/return_calculator.py](services/backtesting/return_calculator.py).
+Core logic: [engine/backtesting/backtest.py](engine/backtesting/backtest.py),
+[engine/backtesting/metrics_calculator.py](engine/backtesting/metrics_calculator.py),
+[engine/backtesting/return_calculator.py](engine/backtesting/return_calculator.py).
 
 ### Plotting and Reporting
 - JSON outputs in `output/`
 - Plot generation for model and strategy comparisons
 
-Plotting modules: [services/plotting](services/plotting).
+Plotting modules: [engine/plotting](engine/plotting).
 
 ---
 
@@ -99,7 +98,7 @@ Core parameters are defined in `config/config.py` and read by `main.py`.
 Common tuning points:
 
 - **Asset universe** (tickers)
-- **Model list** and hyperparameters
+- **LSTM hyperparameters**
 - **Probability thresholds** for strategy grids
 - **Allocation mode** (`full_deployment` or `cash_allocation`)
 - **Top-K selection** (`top_1`, `top_5`, `all`)
@@ -109,7 +108,6 @@ Common tuning points:
 
 ## Outputs
 
-- `output/models_comparison.json`
 - `output/backtest_summary.json`
 - Plots in `output/`
 

@@ -54,7 +54,7 @@ class ApplicationReporter(BaseReporter):
     def log_startup(self) -> None:
         """Log application startup."""
         self.logger.info("=" * 80)
-        self.logger.info("STARTING CLASSIFICATION PIPELINE WITH ENSEMBLE LEARNING")
+        self.logger.info("STARTING LSTM CLASSIFICATION PIPELINE")
         self.logger.info("=" * 80)
     
     def log_data_initialization(self, n_tickers: int, start_date: str) -> None:
@@ -68,13 +68,13 @@ class ApplicationReporter(BaseReporter):
         self.logger.info("✓ Stock data initialized")
     
     def log_algorithms_initialization(self, algorithm_names: List[str]) -> None:
-        """Log ML algorithms initialization.
+        """Log ML model initialization.
         
         Args:
-            algorithm_names: List of algorithm names
+            algorithm_names: List of model names
         """
-        self.logger.info(f"Initializing {len(algorithm_names)} ML algorithms...")
-        self.logger.info(f"✓ Algorithms initialized: {algorithm_names}")
+        self.logger.info(f"Initializing {len(algorithm_names)} ML model(s)...")
+        self.logger.info(f"✓ Models initialized: {algorithm_names}")
     
     def log_configuration(self, config: Dict) -> None:
         """Log pipeline configuration parameters.
@@ -103,20 +103,18 @@ class ApplicationReporter(BaseReporter):
         self.logger.info(f"\n  Backtesting will test ALL {n_strategies} STRATEGIES with {n_thresholds} thresholds each")
         self.logger.info(f"  Total combinations: {n_strategies} strategies × {n_thresholds} thresholds = {n_strategies * n_thresholds} tests")
     
-    def log_parallelization(self, n_algorithms: int, n_strategies: int, n_thresholds: int, 
+    def log_parallelization(self, n_strategies: int, n_thresholds: int, 
                            parallelization: Dict, n_cpu: int) -> None:
         """Log parallelization settings.
         
         Args:
-            n_algorithms: Number of algorithms
             n_strategies: Number of strategies
             n_thresholds: Number of thresholds
             parallelization: Parallelization configuration dictionary
             n_cpu: Number of CPU cores available
         """
         self.logger.info(f"\n  Parallelization (CPU cores available: {n_cpu}):")
-        self.logger.info(f"    - Algorithm selection: {parallelization['algorithm_selection']} workers (for {n_algorithms} algorithms)")
-        self.logger.info(f"    - Fold evaluation: {parallelization['fold_evaluation']} workers (for 14 WFV folds)")
+        self.logger.info(f"    - Fold evaluation: {parallelization['fold_evaluation']} workers (WFV folds)")
         self.logger.info(f"    - Threshold testing: {parallelization['threshold_testing']} workers (for {n_strategies * n_thresholds} combinations)")
     
     def log_completion(self) -> None:
@@ -178,16 +176,23 @@ class PipelineReporter(BaseReporter):
         """
         self.logger.info(f"[Phase: {phase_name}] Completed - Status: {status}")
     
-    def log_model_selection(self, model_name: str, score: float, metrics: Dict) -> None:
-        """Log model selection results.
+    def log_wfv_results(self, model_name: str, mean_ic: float, std_ic: float, fold_ics: List[float], metrics: Dict) -> None:
+        """Log walk-forward validation results.
         
         Args:
-            model_name: Name of selected model
-            score: Model score
-            metrics: Model metrics dictionary
+            model_name: Name of the model
+            mean_ic: Mean IC across folds
+            std_ic: Std dev of IC across folds
+            fold_ics: List of fold ICs
+            metrics: Classification metrics dictionary
         """
-        self.logger.info(f"✓ Best model selected: {model_name} (Score: {score:.6f})")
-        self.logger.debug(f"Model metrics: {metrics}")
+        self.logger.info(f"✓ WFV complete for {model_name}")
+        self.logger.info(f"  Fold ICs: {[(round(ic, 4)) for ic in fold_ics]}")
+        self.logger.info(f"  Mean IC: {mean_ic:.6f} ± {std_ic:.6f}")
+        self.logger.info(
+            f"  ML Metrics: Acc: {metrics.get('accuracy', 0):.3f} | "
+            f"F1: {metrics.get('f1_score', 0):.3f} | AUC: {metrics.get('auc', 0.5):.3f}"
+        )
     
     def log_backtest_results(self, strategy_results: Dict) -> None:
         """Log backtest results for all strategies.

@@ -2,7 +2,6 @@ import os
 import pandas as pd
 import numpy as np
 from typing import Dict
-from .model_metrics import ModelMetricsPlotter
 from .strategy_plots import StrategyPlotter
 from .threshold_plots import ThresholdPlotter
 from .portfolio_plots import PortfolioPlotter
@@ -13,13 +12,12 @@ class PlotGenerator:
     Responsibilities:
     - All matplotlib-based visualizations for the pipeline
     - Backtest equity curves, drawdowns, and strategy comparisons
-    - Model selection metrics and comparison charts
+    - Strategy and portfolio visualizations
     - Portfolio allocation and stock selection summaries
     """
     
     def __init__(self, initial_capital: float):
         self.initial_capital = initial_capital
-        self.model_metrics_plotter = ModelMetricsPlotter()
         self.strategy_plotter = StrategyPlotter(initial_capital)
         self.threshold_plotter = ThresholdPlotter(initial_capital)
         self.portfolio_plotter = PortfolioPlotter(initial_capital)
@@ -58,10 +56,6 @@ class PlotGenerator:
             
         return selected
 
-    def plot_model_metrics_comparison(self, model_results: Dict[str, Dict], output_dir: str) -> None:
-        os.makedirs(output_dir, exist_ok=True)
-        self.model_metrics_plotter.plot_model_metrics_comparison(model_results, output_dir)
-        
     def plot_all(self, backtest_results: Dict, test_df: pd.DataFrame, output_dir: str) -> None:
         os.makedirs(output_dir, exist_ok=True)
         """Generate all backtest plots."""

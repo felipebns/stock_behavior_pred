@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from unittest.mock import MagicMock
 from engine.pipeline.pipeline import Pipeline
-from engine.algorithms.logistic_regression import LogisticRegressionAlgorithm
+from engine.algorithms.lstm import LSTMAlgorithm
 from engine.stock.stock import Stock
 
 class MockStock(Stock):
@@ -39,19 +39,28 @@ def test_pipeline_integration(tmp_path):
     mock_stock = MockStock()
     
     # Very light model configuration
-    models = [LogisticRegressionAlgorithm(max_iter=10)]
+    model = LSTMAlgorithm(
+        lookback=5,
+        hidden_size=8,
+        num_layers=1,
+        dropout=0.0,
+        lr=0.001,
+        epochs=1,
+        batch_size=16,
+        device="cpu",
+        seed=42,
+    )
     
     # tmp_path is a pytest fixture providing an isolated temporary directory
     pipeline = Pipeline(
         stock=mock_stock,
-        algorithms=models,
+        algorithm=model,
         output_dir=str(tmp_path),
         test_size=0.20,  # 20% of remaining ~100 days = ~20 days for Test Set
         wfv_train_window=40,  # Train fold size
         wfv_test_window=10,   # Test fold size
         probability_thresholds=[0.50], # Just one threshold to be fast
         parallelization={
-            "algorithm_selection": 1,
             "fold_evaluation": 1,
             "threshold_testing": 1
         }

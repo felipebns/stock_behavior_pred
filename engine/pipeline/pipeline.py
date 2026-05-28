@@ -1,12 +1,11 @@
 import pandas as pd
+import numpy as np
 import time
 from pathlib import Path
 from typing import Tuple, Dict, Any
-from engine.pipeline.model_selector import ModelSelector
-from engine.pipeline.metrics_evaluator import MetricsEvaluator
+from engine.validation.walk_forward_validator import WalkForwardValidator
 from engine.log.reporters import PipelineReporter
 from engine.backtesting import Backtest
-from engine.plotting.plot_generator import PlotGenerator
 from engine.stock.stock import Stock
 from engine.algorithms.base import Algorithm
 from engine.log.logger_config import get_logger
@@ -15,14 +14,14 @@ from engine.log.logger_config import get_logger
 class Pipeline:
     """Main ML pipeline orchestrator.
     
-    Composes: ModelSelector, MetricsEvaluator, PipelineOrchestrator, Backtest
-    Workflow: Data → Features → Model Selection → Backtesting
+    Composes: WalkForwardValidator, Backtest
+    Workflow: Data → Features → Walk-Forward Validation → Backtesting
     """
     
     def __init__(
         self,
         stock: Stock,
-        algorithms: list[Algorithm],
+        algorithm: Algorithm,
         output_dir: str = "output",
         test_size: float = 0.20,
         wfv_train_window: int = 750,
@@ -38,9 +37,9 @@ class Pipeline:
         purchase_threshold: float = 0.50,
         parallelization: Dict[str, int] = None,
     ):
-        """Initialize pipeline with data source and algorithms."""
+        """Initialize pipeline with data source and algorithm."""
         self.stock = stock
-        self.algorithms = algorithms
+        self.algorithm = algorithm
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.test_size = test_size
@@ -62,18 +61,11 @@ class Pipeline:
         
         # Parallelization settings (with defaults)
         self.parallelization = parallelization or {
-            "algorithm_selection": 2,
             "fold_evaluation": 4,
             "threshold_testing": 3,
         }
         
         # Initialize components
-        self.model_selector = ModelSelector(
-            wfv_train_window, wfv_test_window,
-            max_workers=self.parallelization.get("algorithm_selection", 2),
-            fold_workers=self.parallelization.get("fold_evaluation", 4)
-        )
-        self.metrics_evaluator = MetricsEvaluator()
         self.reporter = PipelineReporter(self.output_dir)
         self.logger = get_logger()
         
@@ -81,7 +73,7 @@ class Pipeline:
         self.phase_times = {}
     
     def run(self, save: bool = True) -> Dict[str, Any]:
-        """Execute complete pipeline: data → features → model selection → backtest.
+        """Execute complete pipeline: data → features → walk-forward validation → backtest.
         
         Returns:
             Dictionary with metrics and backtest results
@@ -109,41 +101,34 @@ class Pipeline:
             self.phase_times["0_data_preparation"] = time.time() - phase_start
             self.reporter.log_phase_end("0: Data Preparation")
             
-            # Phase 1: Model selection via walk-forward validation
+            # Phase 1: Walk-forward validation
             self.reporter.log_phase_start(
-                "1: Model Selection",
+                "1: Walk-Forward Validation",
                 "Using walk-forward validation with Information Coefficient"
             )
             phase_start = time.time()
-            self.logger.info(f"Testing {len(self.algorithms)} algorithms...")
-            best_model, best_model_name, best_score = self.model_selector.select(
-                self.algorithms, train_df, feature_cols, target_col
+            self.logger.info(f"Validating model: {self.algorithm.name()}")
+            validator = WalkForwardValidator(
+                self.wfv_train_window,
+                self.wfv_test_window,
+                max_workers=self.parallelization.get("fold_evaluation", 4),
             )
-            self.phase_times["1_model_selection"] = time.time() - phase_start
-            self.reporter.log_model_selection(best_model_name, best_score, {})
-            self.reporter.log_phase_end("1: Model Selection")
-            
-            # Save model selection results for visualization
-            model_results = {}
-            for model_name, model_data in self.model_selector.results.items():
-                model_results[model_name] = {
-                    "mean_ic": model_data['mean_ic'],
-                    "std_ic": model_data['std_ic'],
-                    "wfv_score": model_data['score'],
-                    "accuracy": model_data.get('accuracy', 0),
-                    "f1_score": model_data.get('f1_score', 0),
-                    "auc": model_data.get('auc', 0.5),
-                    "elapsed_time": model_data['elapsed']
-                }
+            wfv_df, predictions, probs, fold_ics, mean_ic, std_ic = validator.validate(
+                train_df, self.algorithm, feature_cols, target_col
+            )
+            self.phase_times["1_walk_forward_validation"] = time.time() - phase_start
+            metrics = self._calculate_wfv_metrics(wfv_df, predictions, probs, target_col)
+            self.reporter.log_wfv_results(self.algorithm.name(), mean_ic, std_ic, fold_ics, metrics)
+            self.reporter.log_phase_end("1: Walk-Forward Validation")
             
             # Phase 2: Fit best model on full train set (required for predictions)
             self.reporter.log_phase_start(
                 "2: Model Training",
-                f"Training {best_model_name} on full training dataset"
+                f"Training {self.algorithm.name()} on full training dataset"
             )
             phase_start = time.time()
-            self.logger.info(f"Training {best_model_name} on full train set ({len(train_df)} samples)...")
-            best_model.fit(train_df, pd.DataFrame(), feature_cols, target_col)
+            self.logger.info(f"Training {self.algorithm.name()} on full train set ({len(train_df)} samples)...")
+            self.algorithm.fit(train_df, pd.DataFrame(), feature_cols, target_col)
             train_time = time.time() - phase_start
             self.logger.info(f"✓ Training completed in {train_time:.2f}s")
             self.phase_times["2_model_training"] = train_time
@@ -153,36 +138,13 @@ class Pipeline:
             if save:
                 self.reporter.log_phase_start(
                     "3: Backtesting",
-                    f"Running backtest on test set using {best_model_name}"
+                    f"Running backtest on test set using {self.algorithm.name()}"
                 )
                 phase_start = time.time()
-                self.logger.info(f"Running backtest with {best_model_name} predictions on test set...")
-                backtest_results = self._run_backtest(best_model, test_df, feature_cols)
+                self.logger.info(f"Running backtest with {self.algorithm.name()} predictions on test set...")
+                backtest_results = self._run_backtest(self.algorithm, test_df, feature_cols)
                 self.phase_times["3_backtesting"] = time.time() - phase_start
                 self.reporter.log_phase_end("3: Backtesting")
-            
-            # Phase 4: Visualization (save results and generate plots)
-            if save:
-                self.reporter.log_phase_start(
-                    "4: Visualization",
-                    "Saving results and generating all plots"
-                )
-                phase_start = time.time()
-                
-                # Save model selection results to JSON
-                import json
-                models_output = self.output_dir / "models_comparison.json"
-                with open(models_output, 'w') as f:
-                    json.dump(model_results, f, indent=2)
-                self.logger.info(f"✓ Model comparison saved to {models_output}")
-                
-                # Generate model metrics comparison plot via PlotGenerator
-                self.logger.info(f"Generating model selection comparison plot...")
-                plot_gen_for_models = PlotGenerator(self.initial_capital)
-                plot_gen_for_models.plot_model_metrics_comparison(model_results, str(self.output_dir))
-                
-                self.phase_times["4_visualization"] = time.time() - phase_start
-                self.reporter.log_phase_end("4: Visualization")
             
             # Log timing summary
             total_time = time.time() - pipeline_start
@@ -217,6 +179,40 @@ class Pipeline:
         )
         
         return train_df, test_df
+
+    def _calculate_wfv_metrics(
+        self,
+        wfv_df: pd.DataFrame,
+        predictions: np.ndarray,
+        probs: np.ndarray,
+        target_col: str,
+    ) -> Dict[str, float]:
+        from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
+
+        y_true = wfv_df[target_col].to_numpy()
+        y_pred = np.array(predictions)
+        y_prob = np.array(probs)
+
+        try:
+            acc = float(accuracy_score(y_true, y_pred))
+        except Exception:
+            acc = 0.0
+
+        try:
+            f1 = float(f1_score(y_true, y_pred, zero_division=0))
+        except Exception:
+            f1 = 0.0
+
+        try:
+            auc = float(roc_auc_score(y_true, y_prob))
+        except Exception:
+            auc = 0.5
+
+        return {
+            "accuracy": acc,
+            "f1_score": f1,
+            "auc": auc,
+        }
     
     def _run_backtest(self, best_algo: Algorithm, test_df: pd.DataFrame, 
                      features: list[str]) -> Dict[str, Any]:

@@ -6,17 +6,17 @@ from concurrent.futures import ProcessPoolExecutor
 from typing import Tuple, List
 
 class WalkForwardValidator:
-    """Walk-Forward Validation for model selection without data leakage.
+    """Walk-Forward Validation for model evaluation without data leakage.
     
     Uses GROWING WINDOW approach:
     - Train on [0:train_end], test on [train_end:test_end]
     - Each iteration rolls BOTH boundaries forward by test_window
     - No overlap or reuse of test data in training
     - Models strictly isolated per fold using deepcopy
-    - Uses Information Coefficient (IC) as selection metric
+    - Uses Information Coefficient (IC) as evaluation metric
     """
     
-    def __init__(self, train_window: int = 1000, test_window: int = 250):
+    def __init__(self, train_window: int = 1000, test_window: int = 250, max_workers: int = 4):
         """Initialize validator with window sizes (in dates, not rows).
         
         Args:
@@ -25,6 +25,7 @@ class WalkForwardValidator:
         """
         self.train_window = train_window
         self.test_window = test_window
+        self.max_workers = max_workers
     
     def validate(
         self,
@@ -90,7 +91,7 @@ class WalkForwardValidator:
         fold_ics = []
         
         
-        with ProcessPoolExecutor(max_workers=4) as executor:
+        with ProcessPoolExecutor(max_workers=self.max_workers) as executor:
             fold_futures = {
                 executor.submit(
                     self._evaluate_fold,
