@@ -8,7 +8,6 @@ from engine.log.reporters import PipelineReporter
 from engine.backtesting import Backtest
 from engine.plotting.plot_generator import PlotGenerator
 from engine.stock.stock import Stock
-from engine.stock.transform import FeatureEngineer
 from engine.algorithms.base import Algorithm
 from engine.log.logger_config import get_logger
 
@@ -45,7 +44,6 @@ class Pipeline:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.test_size = test_size
-        self.features = FeatureEngineer()
         
         # Walk-Forward Validation parameters
         self.wfv_train_window = wfv_train_window
@@ -103,9 +101,7 @@ class Pipeline:
             self.logger.info(f"✓ Fetched {len(raw_df)} records")
             
             self.logger.info("Building features...")
-            dataset, feature_cols, target_col = self.features.build(
-                raw_df, self.algorithms[0].feature_profile()
-            )
+            dataset, feature_cols, target_col = self.stock.build_features(raw_df)
             self.logger.info(f"✓ Built {len(feature_cols)} features, dataset shape: {dataset.shape}")
             
             self.logger.info("Performing temporal train-test split (80-20)...")

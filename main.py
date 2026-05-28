@@ -97,11 +97,11 @@ if __name__ == "__main__":
 
 """Rewrite the code to my own vision"""
 """Should be deterministic, always needs to converge"""
+"""Remove multiple ML models, 1 nm. 1 merge of strategy, need to analyse market to change strategy dynamically"""
 """Final purchase gate adjustments needs to work, strategies can change their threshold, it should be in a layer after that"""
 """Better test files, now is just random functions, need to centralize in a single testing framework, now is desorganized"""
 """Volatily weight funciona funciona com o full alocation ? ele ta pulando essa etapa ? """
 """Test other evaluation metrics, dont need to be just final backtesting results"""
-"""Mudar interface de config/main/paralelização, pode ficar mais claro, passar apenas config para pipeline ? abstrair parametros de paralel ? """
 """Separamento de tickers correto ? estou analizando df corretamente com as features separadas ?"""
 """Log de linhas faltando no stock"""
 
@@ -115,18 +115,9 @@ if __name__ == "__main__":
 """Validation fine tunning, find right number of windows days..."""
 """Change strategies parameters to optimize"""
 """Models parameter tuning/more features ?"""
-"""Compare again to paper, there could be usefull insights"""
 
 """Future improvements"""
 
 """Possible signal decomposotion"""
 """Eigen portfolios pca ?"""
 """Encapsulating framework, finish .toml, put name, license, email, etc"""
-
-
-
-"""
-Notes:
-
-It doesnt make sense to use external backtesting engine, it is way to customized right now, very specific
-"""

@@ -21,10 +21,6 @@ class Algorithm(ABC):
     def name(self) -> str:
         raise NotImplementedError
 
-    @abstractmethod
-    def feature_profile(self) -> str:
-        raise NotImplementedError
-
 class BaseScikitClassificationAlgorithm(Algorithm):
     def __init__(self, model):
         self.model = make_pipeline(StandardScaler(), model)
@@ -53,6 +49,3 @@ class BaseScikitClassificationAlgorithm(Algorithm):
         if hasattr(self.model, "predict_proba"):
             return self.model.predict_proba(X)[:, 1]
         return self.model.decision_function(X) # fallback for SVC without probability
-
-    def feature_profile(self) -> str:
-        return "classification_indicators"
