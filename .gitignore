@@ -4,3 +4,5 @@ __pycache__
 *.pdf
 *.log
 .pytest_cache/
+data/out/
+data/in/prices.parquet

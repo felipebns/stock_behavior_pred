@@ -1,105 +1,95 @@
-from multiprocessing import cpu_count
-from datetime import datetime, timezone
-from engine.reproducibility import ReproducibilityManager
+"""`python main.py download` baixa os preços; `python main.py run` roda features, walk-forward e backtest."""
+import argparse
+import dataclasses
+import platform
+import time
+from importlib.metadata import version
+from pathlib import Path
 
-ReproducibilityManager.setup_reproducibility(seed=42)
+import pandas as pd
 
-from engine.stock.stock import Stock
-from engine.pipeline import Pipeline
-from engine.algorithms.lstm import LSTMAlgorithm
-from engine.log.logger_config import setup_logging, get_logger
-from engine.log.reporters import ApplicationReporter
-from config.config import CONFIG
+from config.config import CONFIG, TICKER_ALIASES, Config
+from engine import metrics
+from engine.data import prices as px
+from engine.data import universe
+from engine.pipeline import load_inputs, run_pipeline
+from engine.portfolio import run_backtest
+from engine.results import RunResults, save_results
+
+PACKAGES = ("pandas", "numpy", "lightgbm", "scikit-learn", "yfinance", "streamlit")
+
+
+def download(config: Config) -> None:
+    snapshots = universe.load_constituents(config.data_in / config.constituents_file, TICKER_ALIASES)
+    tickers = universe.tickers_since(snapshots, config.price_start) + [config.benchmark_ticker, config.risk_free_ticker]
+    prices, failed = px.download_prices(tickers, start=config.price_start)
+    path = config.data_in / config.prices_file
+    px.save_prices(prices, path)
+    print(f"{prices['ticker'].nunique()} tickers salvos em {path} "
+          f"({prices['date'].min().date()} → {prices['date'].max().date()})")
+    print(f"Sem dados no Yahoo ({len(failed)}): {', '.join(failed)}")
+
+
+def output_dir(config: Config, start: str | None, end: str | None) -> Path:
+    """A run limited by --start/--end goes to its own folder so it never replaces the full results the app reads."""
+    return config.data_out if start is None and end is None else config.data_out / "partial"
+
+
+def run(config: Config, start: str | None, end: str | None) -> None:
+    started = time.perf_counter()
+    results = run_pipeline(load_inputs(config), config, start=start, end=end)
+    results.run_info.update({
+        "config": dataclasses.asdict(config),
+        "runtime_minutes": round((time.perf_counter() - started) / 60.0, 2),
+        "generated_at": pd.Timestamp.now().isoformat(timespec="seconds"),
+        "python": platform.python_version(),
+        "versions": {package: version(package) for package in PACKAGES},
+    })
+    out = output_dir(config, start, end)
+    save_results(results, out)
+    print(f"Resultados em {out}/ ({results.run_info['runtime_minutes']} min)")
+    report(results, config)
+
+
+def report(results: RunResults, config: Config) -> None:
+    backtest = run_backtest(results.predictions, results.market, config.threshold, config.cost_bps)
+    daily = backtest.daily
+    invested = daily["invested"]
+    table = pd.DataFrame({
+        "Carteira (bruta)": metrics.performance_metrics(daily["gross"], daily["rf"], daily["bench"], invested),
+        "Carteira (líquida)": metrics.performance_metrics(daily["net"], daily["rf"], daily["bench"], invested),
+        "S&P 500 TR": metrics.performance_metrics(daily["bench"], daily["rf"]),
+    })
+    print(f"\nBacktest {daily.index.min().date()} → {daily.index.max().date()} · {len(daily)} dias · "
+          f"limiar {config.threshold} · custo {config.cost_bps} bps")
+    print(table.to_string(float_format=lambda v: f"{v:.4f}"))
+    print(f"Giro médio (compras + vendas): {daily['turnover'].mean():.1%}/dia · custo total: {daily['cost'].sum():.2%}")
+    print(f"Dias investido: {invested.mean():.1%} · posições por dia investido: "
+          f"{daily.loc[invested, 'n_positions'].mean():.1f} · hit ratio das posições: "
+          f"{metrics.position_hit_ratio(backtest.positions):.1%}")
+    print("Modelo:", {name: round(value, 4) for name, value in metrics.model_metrics(results.predictions).items()})
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Backtest ML do S&P 500")
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("download", help="baixa preços sem ajuste de dividendos (yfinance)")
+    run_command = commands.add_parser("run", help="features, walk-forward e backtest; grava data/out")
+    run_command.add_argument("--start", help="primeira data de decisão (YYYY-MM-DD); rodadas parciais gravam em data/out/partial")
+    run_command.add_argument("--end", help="última data de decisão (YYYY-MM-DD)")
+    args = parser.parse_args()
+    if args.command == "download":
+        download(CONFIG)
+    else:
+        run(CONFIG, args.start, args.end)
+
 
 if __name__ == "__main__":
-    # Setup logging system
-    logger = setup_logging(log_dir="logs")
-    app_reporter = ApplicationReporter(output_dir=CONFIG["output_dir"])
+    main()
 
-    # Log startup
-    app_reporter.log_startup()
-    
-    end_date = datetime.now(timezone.utc).date().isoformat()
-    
-    # Log data initialization
-    app_reporter.log_data_initialization(len(CONFIG['tickers']), CONFIG['start_date'])
-    stock = Stock(tickers=CONFIG["tickers"], start=CONFIG["start_date"], end=end_date)
 
-    # Log algorithms initialization
-    model_names = ["LSTM"]
-    app_reporter.log_algorithms_initialization(model_names)
-    model = LSTMAlgorithm(
-        lookback=CONFIG["lookback_period"],
-        **CONFIG["lstm_params"],
-    )
-
-    # Log configuration
-    app_reporter.log_configuration(CONFIG)
-    
-    # Calculate parallelization settings automatically based on CPU count
-    n_strategies = 8
-    n_thresholds = len(CONFIG['probability_thresholds'])
-    n_cpu = cpu_count()
-
-    parallelization = {
-        "fold_evaluation": max(1, min(4, n_cpu)),
-        "threshold_testing": max(1, n_cpu - 1),  # We can use all CPUs for the final backtest (leaving 1 for OS)
-    }
-    CONFIG["parallelization"] = parallelization
-    
-    # Log backtesting plan and parallelization
-    app_reporter.log_backtesting_plan(n_strategies, n_thresholds)
-    app_reporter.log_parallelization(n_strategies, n_thresholds, parallelization, n_cpu)
-
-    pipeline = Pipeline(
-        stock=stock, 
-        algorithm=model, 
-        output_dir=CONFIG["output_dir"],
-        test_size=CONFIG["test_size"],
-        wfv_train_window=CONFIG["wfv_train_window"],
-        wfv_test_window=CONFIG["wfv_test_window"],
-        initial_capital=CONFIG["initial_capital"],
-        transaction_cost=CONFIG["transaction_cost"],
-        slippage=CONFIG["slippage"],
-        annual_rf_rate=CONFIG["annual_rf_rate"],
-        probability_thresholds=CONFIG["probability_thresholds"],
-        position_sizing=CONFIG["position_sizing"],
-        position_selection=CONFIG["position_selection"],
-        allocation_mode=CONFIG["allocation_mode"],
-        purchase_threshold=CONFIG["purchase_threshold"],
-        parallelization=CONFIG["parallelization"],
-    )
-
-    try:
-        results = pipeline.run(save=True)
-        app_reporter.log_completion()
-    except Exception as e:
-        logger.error(f"Pipeline failed with error: {e}", exc_info=True)
-        raise
-
-"""TODOs"""
-
-"""Rewrite the code to my own vision"""
-"""Should be deterministic, always needs to converge"""
-"""Final purchase gate adjustments needs to work, strategies can change their threshold, it should be in a layer after that"""
-"""Better test files, now is just random functions, need to centralize in a single testing framework, now is desorganized"""
-"""Volatily weight funciona funciona com o full alocation ? ele ta pulando essa etapa ? """
-"""Test other evaluation metrics, dont need to be just final backtesting results"""
-"""Separamento de tickers correto ? estou analizando df corretamente com as features separadas ?"""
-"""Log de linhas faltando no stock"""
-
-"""Future testing"""
-
-"""Test what is more effective, full deployment or cash fallbacks"""
-"""Stocks selection, more than 5 causes overfitting, need to think of a way to get "similar" stocks to diversify"""
-"""Explore more probabilities to chose best ML model, using strategy, etc. (not only IC)"""
-"""Test more buy/sell strategies | Test more averages for mean reversion"""
-"""Validation fine tunning, find right number of windows days..."""
-"""Change strategies parameters to optimize"""
-"""Models parameter tuning/more features ?"""
-
-"""Future improvements"""
-
-"""Possible signal decomposotion"""
-"""Eigen portfolios pca ?"""
-"""Encapsulating framework, finish .toml, put name, license, email, etc"""
+"""
+Reorganizar em classes
+Simplificar
+garantir que não tem survivorship bias, somente as ações do instante
+"""

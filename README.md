@@ -1,120 +1,62 @@
-# QuantFund Engine
+# Stock Behavior Prediction — S&P 500 daily direction backtest
 
-ML backtesting engine focused on walk-forward validation, strategy evaluation, portfolio allocation, and report generation. 
+Every trading day, after the close, a LightGBM classifier retrained on the last *X* trading days estimates, for each stock that is in the S&P 500 **on that day**, the probability that it goes up over the next portfolio day. The long-only portfolio holds the stocks whose probability is above a threshold, weighted by that probability; if none qualifies it stays in cash at the 13-week T-bill rate. Results are compared with the S&P 500 Total Return index in a Streamlit app.
 
-## Quick Start
+## Quick start
 
 ```bash
-python -m venv venv
-pip install -r requirements.txt
-python main.py
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
+venv/bin/python main.py download        # prices without dividend adjustment (yfinance) → data/in/prices.parquet
+venv/bin/python main.py run             # features, walk-forward and backtest → data/out/
+venv/bin/streamlit run app/dashboard.py # results app (never retrains)
+venv/bin/python -m pytest               # includes the lookahead tests
 ```
 
----
+`main.py run --start YYYY-MM-DD --end YYYY-MM-DD` limits the decision dates (handy for quick runs).
 
-## What This Engine Does
+## Time convention (no lookahead)
 
-End-to-end pipeline for daily, long-only portfolio research and backtesting:
+| Step | When | Uses |
+|---|---|---|
+| Decision | after the close of *t* | prices/volumes/dividends dated ≤ *t*, index membership ≤ *t*, fed funds futures ≤ *t*, GPR ≤ *t* − 7 days |
+| Execution | open of *t+1*, rebalanced at the open of *t+2* | — |
+| Realized return / target | `(Open[t+2] + Div[t+2]) / Open[t+1] − 1`, label = return > 0 | — |
+| Training for decision *t* | rows dated *t* − X − 1 … *t* − 2 | only labels already known at the close of *t* |
 
-1. **Data preparation and feature engineering**
-2. **Walk-forward validation** to measure model stability
-3. **Model training** on the best configuration
-4. **Backtesting** with multiple strategies and probability thresholds
-5. **Reporting and plotting** of results
+`tests/test_pipeline.py::test_predictions_do_not_depend_on_future_data` runs the whole pipeline twice — once with every input dated after a cutoff scrambled — and requires identical predictions up to the cutoff.
 
-This is designed to be modular so you can swap models, strategies, assets, and allocation policies without changing the pipeline.
+## Data (`data/in/`)
 
----
+- `sp500_historical_constituents.csv` — point-in-time membership snapshots; renamed tickers are mapped in `config.TICKER_ALIASES`.
+- `prices.parquet` — Yahoo daily bars with `auto_adjust=False, actions=True` (split-adjusted, not dividend-adjusted); `Adj Close` is never stored because it embeds future dividends. Includes `^SP500TR` (benchmark) and `^IRX` (risk-free).
+- `ff_futures_daily.csv` — 30-day fed funds futures: implied rate ~12 months ahead, its 21-day change and the slope vs the current month.
+- `data_gpr_daily_recent.xls` — Caldara & Iacoviello daily geopolitical risk index, used with a 7-day publication lag.
 
-## Pipeline Phases
+## Model and portfolio
 
-### Phase 0: Data Preparation
-- Fetch OHLCV data
-- Engineer technical features (momentum, volatility, mean reversion, volume)
-- Build a binary target for next-day direction
-- Temporal split into train/test
+- 36 causal features (`engine/features.py`): stock returns/momentum/volatility/trend/volume/dividend yield/beta, cross-sectional ranks among index members, market and breadth, fed funds and GPR.
+- LightGBM with fixed conservative parameters (`config/config.py`), retrained every day (sequential loop).
+- Weights `prob_i / Σ prob` over stocks with `prob > threshold` (default 0.55, fixed a priori); transaction costs in bps per side, charged on buys + sells (Σ|Δw| at each open, measured against weights drifted by the previous day's returns; default 5 bps).
+- Metrics: cumulative return, CAGR, volatility, Sharpe/Sortino (excess over ^IRX), max drawdown, Calmar, hit ratios, beta/alpha/information ratio vs the benchmark; model AUC, IC and calibration.
 
-### Phase 1: Walk-Forward Validation
-- Rolling window validation with fixed train/test sizes
-- Primary metric: Information Coefficient (IC) on out-of-sample returns
+## Known limitations
 
-### Phase 2: Full Training
-- Train the selected model on the full training window
+- Delisted companies are not on Yahoo, some old tickers now name a different company (STI, INFO, APC, SBNY...) and a few recent delistings had their whole history purged (EA, AVB, EQR in Aug 2026), so those members drop out of the universe (survivorship bias). Renames are mapped in `config.TICKER_ALIASES` (FB→META, ANTM→ELV...). `run_info.json` lists every member priced on under half of its member days, plus coverage by year; the app plots daily coverage.
+- Yahoo records large spin-offs as fractional splits (RTX 2020, GE 2023, DD 2019...), so those series stay continuous; daily returns above 50% among members are still counted in `run_info.json` as possible data errors, never corrected.
+- The backtest starts when the fed funds futures file allows (Dec 2020 decisions with X = 252) and ends a few days after it ends (staleness tolerance). The constituents file ends 2026-06-30, so later decisions use the last snapshot.
+- `main.py run --start/--end` writes to `data/out/partial` so it never replaces the full results; open it with `BACKTEST_RESULTS_DIR=data/out/partial venv/bin/streamlit run app/dashboard.py`.
 
-### Phase 3: Backtesting
-- Run the trained model on the test period
-- Evaluate multiple strategies and probability thresholds
-- Apply transaction costs, slippage, and capital allocation rules
+## Layout
 
-### Phase 4: Reporting and Plotting
-- Persist backtest summary JSON
-- Generate equity curves and strategy comparison plots
-
----
-
-## Core Components
-
-### Models
-The LSTM model implements the `Algorithm` interface and provides:
-- `fit`, `predict`, `predict_proba`
-- `name`
-
-Models live under [engine/algorithms](engine/algorithms).
-
-### Strategies
-Strategies modify the raw model signal (probability + threshold) with market conditions.
-They live under [engine/strategies](engine/strategies) and implement `BaseStrategy.apply`.
-
-### Allocation
-Allocation is handled by a three-step pipeline:
-1. Top-K selection per day
-2. Probability weighting (optional)
-3. Normalization with allocation mode and confidence gate
-
-See [engine/backtesting/allocation_manager.py](engine/backtesting/allocation_manager.py) and
-[engine/backtesting/position_normalizer.py](engine/backtesting/position_normalizer.py).
-
-### Backtesting
-The backtesting engine runs strategy/threshold grids and produces:
-- Daily returns and equity curves
-- Total return, Sharpe, max drawdown, hit rate
-- Per-ticker position summaries
-
-Core logic: [engine/backtesting/backtest.py](engine/backtesting/backtest.py),
-[engine/backtesting/metrics_calculator.py](engine/backtesting/metrics_calculator.py),
-[engine/backtesting/return_calculator.py](engine/backtesting/return_calculator.py).
-
-### Plotting and Reporting
-- JSON outputs in `output/`
-- Plot generation for model and strategy comparisons
-
-Plotting modules: [engine/plotting](engine/plotting).
-
----
-
-## Configuration
-
-Core parameters are defined in `config/config.py` and read by `main.py`.
-Common tuning points:
-
-- **Asset universe** (tickers)
-- **LSTM hyperparameters**
-- **Probability thresholds** for strategy grids
-- **Allocation mode** (`full_deployment` or `cash_allocation`)
-- **Top-K selection** (`top_1`, `top_5`, `all`)
-- **Costs** (transaction cost, slippage)
-
----
-
-## Outputs
-
-- `output/backtest_summary.json`
-- Plots in `output/`
-
----
-
-## Notes
-
-- Engine is long-only.
-- Focus is research and evaluation, not live execution.
-- The application layer (portfolio deployment, UI, brokers) will be added separately.
+```
+config/config.py     all parameters, ticker aliases, LightGBM params
+main.py              CLI: download | run
+app/dashboard.py     Streamlit app
+engine/data/         universe (membership), prices (yfinance, returns), macro (futures, GPR, risk-free)
+engine/features.py   causal features      engine/dataset.py   (date, ticker) table + target
+engine/walk_forward.py  daily retraining  engine/pipeline.py  orchestration
+engine/portfolio.py  selection, weights, costs   engine/metrics.py   metrics
+engine/results.py    data/out persistence
+tests/               unit tests, synthetic market, end-to-end lookahead test, app smoke test
+```

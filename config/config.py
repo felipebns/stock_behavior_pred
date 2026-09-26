@@ -1,85 +1,56 @@
-CONFIG = {
-    # Data parameters - 16 stocks
-    # "tickers": [
-    #     # Tech (5)
-    #     "SPY", "AAPL", "MSFT", "GOOGL", "AMZN",
-    #     # Financial (3)
-    #     "JPM", "BAC", "GS",
-    #     # Healthcare (3)
-    #     "JNJ", "PFE", "UNH",
-    #     # Energy (2)
-    #     "XOM", "CVX",
-    #     # Utilities (2)
-    #     "NEE", "DUK",
-    #     # Consumer (2)
-    #     "WMT", "HD"
-    # ],
-    # testing with 5 stocks also... works better to reduce overfitting
-    "tickers": ["SPY", "AAPL", "MSFT", "GOOGL", "AMZN"],
-    "start_date": "2006-01-01",
+from dataclasses import dataclass, field
+from pathlib import Path
 
-    # Pipeline parameters
-    "output_dir": "output",
-    "test_size": 0.20,
-
-    # Walk-Forward Validation parameters
-    "wfv_train_window": 750,    # ~3 years of training data
-    "wfv_test_window": 250,     # ~1 year of validation data
-
-    # Backtesting parameters
-    "initial_capital": 10000,
-    "transaction_cost": 0.0005,  # 0.05% per trade
-    "slippage": 0.0005,          # 0.05% slippage
-    "annual_rf_rate": 0.05,      # 5% annual risk-free rate
-    "probability_thresholds": [0.50, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59, 0.60],  # Thresholds to test for position sizing
-    "position_sizing": "probability_weighted",  # "equal_weight" or "probability_weighted"
-
-    # Feature engineering parameters
-    "lookback_period": 20,
-
-    # ================== POSITION SELECTION ==================
-    # NOTE: Backtest tests ALL 8 strategies and shows which performed best!
-    #
-    # Strategies tested automatically (no need to select one):
-    #   "ensemble_smart"      - Consensus of 4 factors (RSI, momentum, mean reversion, vol)
-    #   "momentum"            - Follows price trends
-    #   "mean_reversion"      - Buys undervalued (price < SMA50)
-    #   "volatility_weighted" - Reduces position size in high volatility
-    #   "threshold"           - Baseline: probability threshold only
-    #   "buy_and_hold"        - Benchmark: buy day 1, hold forever
-    #   "fixed_income"        - Benchmark: 100% cash (conservative)
-    #   "simple_reversal"     - Benchmark: SMA20 technical analysis only
-    #
-    # Position Selection (how many stocks to trade per day):
-    #   "all"     - Trade all stocks beating threshold (diversified)
-    #   "top_1"   - Trade only best stock of the day (concentrated)
-    #   "top_3"   - Trade top 3 stocks (conservative)
-    #   "top_5"   - Trade top 5 stocks (RECOMMENDED - balanced)
-    #   "top_10"  - Trade top 10 stocks (diversified)
-    # ============================================================================
-    "position_selection": "top_5",           # How many stocks to select per day
-
-    # ================== ALLOCATION LOGIC ==================
-    # allocation_mode: How to deploy capital among selected stocks
-    #   - "cash_allocation": Deploy only in selected, rest in CASH
-    #   - "full_deployment": Deploy 100% equally among selected (RECOMMENDED)
-    #
-    # purchase_threshold: Global confidence gate (applied BEFORE normalization)
-    #   - If best signal < threshold → 100% CASH (no position opened)
-    #   - Default 0.50 = requires 50%+ confidence minimum
-    # ============================================================================
-    "allocation_mode": "full_deployment",
-    "purchase_threshold": 0.50,
-
-    # LSTM hyperparameters (small defaults)
-    "lstm_params": {
-        "hidden_size": 32,
-        "num_layers": 1,
-        "dropout": 0.1,
-        "lr": 0.001,
-        "epochs": 10,
-        "batch_size": 64,
-        "device": "auto",
-        "seed": 42,
-    }
+# Old ticker in the constituents file -> ticker Yahoo uses today for the same security.
+# Only 1:1 renames visible in the constituents file itself (same-date swap, successor has history).
+TICKER_ALIASES: dict[str, str] = {
+    "HRS": "LHX", "TMK": "GL", "BHGE": "BKR", "JEC": "J", "CTL": "LUMN",
+    "MYL": "VTRS", "WLTW": "WTW", "DISCA": "WBD", "BLL": "BALL", "ANTM": "ELV",
+    "SYMC": "GEN", "NLOK": "GEN", "PKI": "RVTY", "RE": "EG", "ABC": "COR",
+    "HCP": "DOC", "PEAK": "DOC", "FLT": "CPAY", "CBS": "PSKY", "VIAC": "PSKY",
+    "PARA": "PSKY", "FI": "FISV", "MMC": "MRSH", "BK": "BNY", "UTX": "RTX",
+    "ARNC": "HWM", "DWDP": "DD", "FB": "META", "LB": "BBWI", "SATS": "ECHO",
 }
+
+LGBM_PARAMS: dict = {
+    "n_estimators": 200,
+    "learning_rate": 0.05,
+    "num_leaves": 15,
+    "min_child_samples": 500,
+    "subsample": 0.8,
+    "subsample_freq": 1,
+    "colsample_bytree": 0.8,
+    "reg_lambda": 1.0,
+    "importance_type": "gain",
+    "random_state": 42,
+    "deterministic": True,
+    "force_col_wise": True,
+    "verbose": -1,
+}
+
+
+@dataclass(frozen=True)
+class Config:
+    data_in: Path = Path("data/in")
+    data_out: Path = Path("data/out")
+    constituents_file: str = "sp500_historical_constituents.csv"
+    ff_futures_file: str = "ff_futures_daily.csv"
+    gpr_file: str = "data_gpr_daily_recent.xls"
+    prices_file: str = "prices.parquet"
+    price_start: str = "2018-06-01"
+    benchmark_ticker: str = "^SP500TR"
+    risk_free_ticker: str = "^IRX"
+    train_window_days: int = 252
+    threshold: float = 0.55
+    cost_bps: float = 5.0
+    gpr_lag_days: int = 7
+    macro_max_staleness_days: int = 5
+    min_history_days: int = 63
+    ff_horizon_months: int = 12
+    ff_max_gap_days: int = 45
+    ff_change_days: int = 21
+    progress_every: int = 50
+    lgbm_params: dict = field(default_factory=lambda: dict(LGBM_PARAMS))
+
+
+CONFIG = Config()

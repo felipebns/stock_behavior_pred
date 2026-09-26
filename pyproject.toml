@@ -4,40 +4,30 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quantfund_engine"
-version = "0.1.0"
-description = "Private ML backtesting engine for portfolio research and strategy evaluation"
+version = "0.2.0"
+description = "Daily S&P 500 direction model (LightGBM, rolling window) and long-only backtest"
 readme = "README.md"
-requires-python = ">=3.9"
-keywords = ["backtesting", "ml", "trading", "quantitative", "portfolio"]
-classifiers = [
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "License :: OSI Approved :: MIT License",
-    "Intended Audience :: Financial and Insurance Industry",
-]
+requires-python = ">=3.11"
 dependencies = [
-    "pandas>=1.0",
-    "numpy>=1.20",
-    "scikit-learn>=1.0",
-    "matplotlib>=3.0",
-    "seaborn>=0.11",
-    "yfinance>=0.1.70",
-    "scipy>=1.5",
-    "torch>=2.9"
+    "pandas>=3.0",
+    "numpy>=2.0",
+    "pyarrow>=20",
+    "scikit-learn>=1.7",
+    "lightgbm>=4.6",
+    "yfinance>=1.2",
+    "xlrd>=2.0",
+    "streamlit>=1.60",
+    "altair>=5.5",
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=7.0",
-    "black>=22.0",
-    "flake8>=4.0"
-]
+dev = ["pytest>=8.0"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["engine*"]
+include = ["engine*", "config*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
+pythonpath = ["."]
