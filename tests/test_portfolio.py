@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from engine.portfolio import run_backtest
+from engine.portfolio import Portfolio
 
 D = pd.bdate_range("2022-01-03", periods=5, name="decision_date")
 
@@ -32,7 +32,7 @@ def predictions():
 
 
 def test_selection_uses_threshold_and_probability_weights(predictions, market):
-    positions = run_backtest(predictions, market, 0.55).positions
+    positions = Portfolio(0.55).backtest(predictions, market).positions
     day0 = positions[positions["decision_date"] == D[0]].set_index("ticker")
     assert set(day0.index) == {"A", "B"}
     assert day0.loc["A", "weight"] == pytest.approx(0.6 / 1.3)
@@ -40,7 +40,7 @@ def test_selection_uses_threshold_and_probability_weights(predictions, market):
 
 
 def test_daily_returns_cash_and_missing(predictions, market):
-    daily = run_backtest(predictions, market, 0.55).daily
+    daily = Portfolio(0.55).backtest(predictions, market).daily
     assert list(daily.index) == list(D[1:5])
     assert daily["decision_date"].tolist() == list(D[:4])
     assert daily["gross"].iloc[0] == pytest.approx(0.6 / 1.3 * 0.01 + 0.7 / 1.3 * -0.02)
@@ -56,20 +56,20 @@ def test_selection_never_looks_at_realized_returns(predictions, market):
     shuffled = predictions.assign(fwd_ret=predictions["fwd_ret"].sample(frac=1.0, random_state=3).to_numpy())
     columns = ["decision_date", "ticker", "weight"]
     pd.testing.assert_frame_equal(
-        run_backtest(predictions, market, 0.55).positions[columns],
-        run_backtest(shuffled, market, 0.55).positions[columns],
+        Portfolio(0.55).backtest(predictions, market).positions[columns],
+        Portfolio(0.55).backtest(shuffled, market).positions[columns],
     )
 
 
 def test_threshold_never_met_is_all_cash(predictions, market):
-    backtest = run_backtest(predictions, market, 0.99)
+    backtest = Portfolio(0.99).backtest(predictions, market)
     assert backtest.positions.empty
     assert not backtest.daily["invested"].any()
     assert backtest.daily["gross"].tolist() == pytest.approx([0.0002] * 4)
 
 
 def test_positions_have_holding_dates_and_contributions(predictions, market):
-    positions = run_backtest(predictions, market, 0.55).positions
+    positions = Portfolio(0.55).backtest(predictions, market).positions
     assert list(positions.columns) == ["decision_date", "holding_date", "ticker", "prob", "weight", "fwd_ret", "contribution"]
     assert (positions["holding_date"] == positions["decision_date"].map(market["holding_date"])).all()
     day0 = positions[positions["decision_date"] == D[0]]
@@ -90,7 +90,7 @@ def test_costs_follow_turnover_against_drifted_weights():
         (dates[3], "A", 0.5, 0.00),
         (dates[4], "C", 0.7, 0.00),
     ])
-    daily = run_backtest(predictions, market, 0.55, cost_bps=10.0).daily
+    daily = Portfolio(0.55, cost_bps=10.0).backtest(predictions, market).daily
     assert daily["turnover"].tolist() == pytest.approx([1.0, 0.1, 2.0, 1.0, 1.0])
     assert daily["cost"].tolist() == pytest.approx([0.001, 0.0001, 0.002, 0.001, 0.001])
     assert daily["net"].iloc[0] == pytest.approx((1 + daily["gross"].iloc[0]) * (1 - 0.001) - 1)
@@ -98,7 +98,7 @@ def test_costs_follow_turnover_against_drifted_weights():
 
 
 def test_zero_cost_means_net_equals_gross(predictions, market):
-    daily = run_backtest(predictions, market, 0.55).daily
+    daily = Portfolio(0.55).backtest(predictions, market).daily
     assert daily["net"].tolist() == pytest.approx(daily["gross"].tolist())
     assert (daily["cost"] == 0).all()
 
@@ -107,4 +107,10 @@ def test_benchmark_gap_inside_the_window_fails_loudly(predictions, market):
     broken = market.copy()
     broken.loc[D[1], "bench_fwd_ret"] = np.nan
     with pytest.raises(ValueError, match="2022-01-04"):
-        run_backtest(predictions, broken, 0.55)
+        Portfolio(0.55).backtest(predictions, broken)
+
+
+def test_select_keeps_only_probabilities_above_the_threshold(predictions):
+    chosen = Portfolio(0.6).select(predictions)
+    assert set(zip(chosen["date"], chosen["ticker"])) == {(D[0], "B"), (D[2], "A"), (D[4], "A")}
+    assert (chosen["weight"] == 1.0).all()

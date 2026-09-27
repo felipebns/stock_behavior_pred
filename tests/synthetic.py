@@ -1,6 +1,8 @@
-"""Synthetic market used by the tests: prices, constituents, fed funds futures and GPR."""
+"""Synthetic market used by the tests: prices and constituents."""
 import numpy as np
 import pandas as pd
+
+from config.config import Config
 
 BENCH = "^SP500TR"
 RF = "^IRX"
@@ -39,18 +41,7 @@ def make_market(n_days: int = 330, n_tickers: int = 12, seed: int = 7) -> dict:
         "date": [dates[0], dates[150], dates[260]],
         "tickers": [tickers[:10], tickers[1:11], tickers[2:12]],
     })
-    ff_bars = pd.DataFrame([
-        {"date": day, "symbol": f"ZQ{m}", "expiration": day + pd.offsets.MonthEnd(m),
-         "close": 100.0 - 100.0 * (0.02 + 0.001 * m + 0.003 * np.sin(k / 50.0))}
-        for k, day in enumerate(dates) for m in range(15)
-    ])
-    days = pd.date_range(dates[0] - pd.Timedelta(days=60), dates[-1] + pd.Timedelta(days=30), freq="D", name="date")
-    gpr = pd.DataFrame({
-        "gpr": rng.uniform(50.0, 200.0, len(days)),
-        "act": rng.uniform(20.0, 150.0, len(days)),
-        "threat": rng.uniform(20.0, 150.0, len(days)),
-    }, index=days)
-    return {"prices": pd.concat(frames, ignore_index=True), "snapshots": snapshots, "ff_bars": ff_bars, "gpr": gpr}
+    return {"prices": pd.concat(frames, ignore_index=True), "snapshots": snapshots}
 
 
 def perturb_after(raw: dict, cutoff: pd.Timestamp, seed: int = 99) -> dict:
@@ -66,9 +57,35 @@ def perturb_after(raw: dict, cutoff: pd.Timestamp, seed: int = 99) -> dict:
         raw["snapshots"],
         pd.DataFrame({"date": [cutoff + pd.Timedelta(days=1)], "tickers": [["T02", "T03", "NEW"]]}),
     ], ignore_index=True)
-    ff_bars = raw["ff_bars"].copy()
-    later = ff_bars["date"] > cutoff
-    ff_bars.loc[later, "close"] = rng.uniform(94.0, 99.0, int(later.sum()))
-    gpr = raw["gpr"].copy()
-    gpr.loc[gpr.index > cutoff] = rng.uniform(1.0, 500.0, size=(int((gpr.index > cutoff).sum()), 3))
-    return {"prices": pd.concat([prices, newcomer], ignore_index=True), "snapshots": snapshots, "ff_bars": ff_bars, "gpr": gpr}
+    return {"prices": pd.concat([prices, newcomer], ignore_index=True), "snapshots": snapshots}
+
+
+SMALL_LGBM = {
+    "n_estimators": 10, "learning_rate": 0.1, "num_leaves": 4, "subsample": 0.8, "subsample_freq": 1,
+    "colsample_bytree": 0.8, "importance_type": "gain", "random_state": 0, "deterministic": True,
+    "force_col_wise": True, "n_jobs": 1, "verbose": -1,
+}
+
+
+def synthetic_config(root, **overrides) -> Config:
+    """Decisions start at business day 210 of the synthetic market; features are complete from day ~160."""
+    start = pd.bdate_range("2019-01-01", periods=330)[210]
+    settings = {
+        "data_in": root / "in", "data_out": root / "out", "price_start": "2019-01-01",
+        "backtest_start": str(start.date()), "train_window_days": 40, "peer_count": 3,
+        "peer_lookback_days": 21, "n_jobs": 1, "lgbm_params": SMALL_LGBM,
+    }
+    return Config(**{**settings, **overrides})
+
+
+def yahoo_response(tickers, dates, skip=()) -> pd.DataFrame:
+    """Same shape as yf.download(group_by='ticker') for the tickers not in `skip`."""
+    bar = {"Open": 10.0, "High": 10.0, "Low": 10.0, "Close": 10.0, "Adj Close": 9.0,
+           "Volume": 100.0, "Dividends": 0.0, "Stock Splits": 0.0}
+    index = pd.DatetimeIndex(pd.to_datetime(dates), name="Date")
+    frames = {t: pd.DataFrame(bar, index=index) for t in tickers if t not in skip}
+    if not frames:
+        return pd.DataFrame()
+    raw = pd.concat(frames, axis=1)
+    raw.columns = raw.columns.set_names(["Ticker", "Price"])
+    return raw

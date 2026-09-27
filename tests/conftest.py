@@ -1,17 +1,25 @@
 import pytest
-from synthetic import BENCH, RF, make_market
+from synthetic import BENCH, RF, make_market, synthetic_config
 
-from engine.data import prices as px
-from engine.data import universe
+from engine.prices import PriceData, clean_prices
+from engine.project import Project
+from engine.universe import Universe
 
 
 @pytest.fixture(scope="session")
 def synthetic_panel():
     raw = make_market()
-    prices = raw["prices"]
-    calendar = px.trading_calendar(prices, BENCH)
-    tickers = sorted(set(prices["ticker"]) - {BENCH, RF})
-    panel = px.build_panel(prices, calendar, tickers)
-    membership = universe.membership_matrix(raw["snapshots"], calendar, tickers)
-    market_close = prices[prices["ticker"] == BENCH].set_index("date")["close"].reindex(calendar)
-    return panel, market_close, membership
+    prices = PriceData(clean_prices(raw["prices"]))
+    calendar = prices.calendar(BENCH)
+    tickers = sorted(prices.tickers - {BENCH, RF})
+    membership = Universe(raw["snapshots"]).membership(calendar, tickers)
+    return prices.panel(calendar, tickers), prices.series(BENCH, "close", calendar), membership
+
+
+@pytest.fixture(scope="session")
+def synthetic_project(tmp_path_factory):
+    raw = make_market()
+    project = Project(synthetic_config(tmp_path_factory.mktemp("project")))
+    project.build_features(Universe(raw["snapshots"]), PriceData(clean_prices(raw["prices"])))
+    project.run(40)
+    return project

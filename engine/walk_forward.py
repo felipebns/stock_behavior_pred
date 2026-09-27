@@ -1,10 +1,10 @@
-"""Daily retraining on a rolling window, predicting only the next decision date."""
-import time
+"""Daily retraining on a rolling window, predicting only the next decision date; decision dates run in parallel."""
 from dataclasses import dataclass
-from typing import Callable
 
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed, effective_n_jobs
+from lightgbm import LGBMClassifier
 
 
 @dataclass
@@ -13,48 +13,67 @@ class WalkForwardResult:
     importance: pd.DataFrame
 
 
-def walk_forward(dataset: pd.DataFrame, features: list[str], calendar: pd.DatetimeIndex, train_window: int,
-                 model_factory: Callable, start=None, end=None, progress_every: int = 0, log=print) -> WalkForwardResult:
+class WalkForward:
     """Row s's label needs the open of s+2, so the fit for decision t uses exactly the rows dated t-X-1 .. t-2."""
-    row_pos = calendar.get_indexer(dataset.index.get_level_values("date"))
-    X = dataset[features].to_numpy(dtype=np.float32)
-    y = dataset["label"].to_numpy(dtype=float)
-    decisions = np.unique(row_pos)
-    decisions = decisions[decisions - train_window - 1 >= row_pos[0]]
-    if start is not None:
-        decisions = decisions[calendar[decisions] >= pd.Timestamp(start)]
-    if end is not None:
-        decisions = decisions[calendar[decisions] <= pd.Timestamp(end)]
-    if len(decisions) == 0:
-        raise ValueError("Nenhuma data de decisão com janela de treino completa no intervalo pedido.")
 
-    predictions, importance = [], []
-    started = time.perf_counter()
-    for n, k in enumerate(decisions, start=1):
-        lo = np.searchsorted(row_pos, k - train_window - 1, side="left")
+    def __init__(self, train_window: int, params: dict, min_child_share: float = 0.004, min_child_floor: int = 20,
+                 n_jobs: int = 1, model_class=LGBMClassifier):
+        self.train_window = train_window
+        self.params = params
+        self.min_child_share = min_child_share
+        self.min_child_floor = min_child_floor
+        self.n_jobs = n_jobs
+        self.model_class = model_class
+
+    def decisions(self, row_pos: np.ndarray, calendar: pd.DatetimeIndex, start=None) -> np.ndarray:
+        first = row_pos[0] + self.train_window + 1
+        begin = first if start is None else calendar.searchsorted(pd.Timestamp(start))
+        if begin < first:
+            raise ValueError(f"a janela de {self.train_window} pregões precisa de {self.train_window + 1} pregões de dados "
+                             f"antes de {pd.Timestamp(start).date()}; o máximo é {begin - row_pos[0] - 1}")
+        decisions = np.unique(row_pos)
+        decisions = decisions[decisions >= begin]
+        if len(decisions) == 0:
+            raise ValueError("nenhuma data de decisão depois do início pedido")
+        return decisions
+
+    def run(self, dataset: pd.DataFrame, features: list[str], calendar: pd.DatetimeIndex, start=None,
+            progress=None) -> WalkForwardResult:
+        row_pos = calendar.get_indexer(dataset.index.get_level_values("date"))
+        X = dataset[features].to_numpy(dtype=np.float32)
+        y = dataset["label"].to_numpy(dtype=float)
+        decisions = self.decisions(row_pos, calendar, start)
+        blocks = np.array_split(decisions, min(len(decisions), 4 * effective_n_jobs(self.n_jobs)))
+        jobs = (delayed(_fit_block)(X, y, row_pos, block, self.train_window, self.params, self.min_child_share,
+                                    self.min_child_floor, self.model_class) for block in blocks)
+        results = []
+        for done, result in enumerate(Parallel(n_jobs=self.n_jobs, return_as="generator")(jobs), start=1):
+            results.append(result)
+            if progress is not None:
+                progress(done / len(blocks))
+        rows = dataset[np.isin(row_pos, decisions)]
+        predictions = pd.DataFrame({
+            "date": rows.index.get_level_values("date"),
+            "ticker": rows.index.get_level_values("ticker"),
+            "prob": np.concatenate([probs for probs, _ in results]),
+            "fwd_ret": rows["fwd_ret"].to_numpy(),
+            "label": rows["label"].to_numpy(),
+        })
+        importance = pd.DataFrame(np.vstack([gains for _, gains in results]),
+                                  index=pd.DatetimeIndex(calendar[decisions], name="date"), columns=features)
+        return WalkForwardResult(predictions, importance)
+
+
+def _fit_block(X, y, row_pos, decisions, window, params, min_child_share, min_child_floor, model_class):
+    probs, gains = [], []
+    for k in decisions:
+        lo = np.searchsorted(row_pos, k - window - 1, side="left")
         hi = np.searchsorted(row_pos, k - 2, side="right")
         known = ~np.isnan(y[lo:hi])
-        model = model_factory()
+        model = model_class(**params, min_child_samples=max(min_child_floor, round(min_child_share * known.sum())))
         model.fit(X[lo:hi][known], y[lo:hi][known].astype(int))
-
         first, last = np.searchsorted(row_pos, k, side="left"), np.searchsorted(row_pos, k, side="right")
-        block = dataset.iloc[first:last]
-        predictions.append(pd.DataFrame({
-            "date": block.index.get_level_values("date"),
-            "ticker": block.index.get_level_values("ticker"),
-            "prob": model.predict_proba(X[first:last])[:, 1],
-            "fwd_ret": block["fwd_ret"].to_numpy(),
-            "label": block["label"].to_numpy(),
-        }))
+        probs.append(model.predict_proba(X[first:last])[:, 1])
         gain = np.asarray(model.feature_importances_, dtype=float)
-        importance.append(gain / gain.sum() if gain.sum() > 0 else gain)
-
-        if progress_every and n % progress_every == 0:
-            elapsed = time.perf_counter() - started
-            remaining = elapsed / n * (len(decisions) - n)
-            log(f"walk-forward {n}/{len(decisions)} ({calendar[k].date()}) · {elapsed / 60:.1f} min · faltam ~{remaining / 60:.1f} min")
-
-    return WalkForwardResult(
-        predictions=pd.concat(predictions, ignore_index=True),
-        importance=pd.DataFrame(importance, index=pd.DatetimeIndex(calendar[decisions], name="date"), columns=features),
-    )
+        gains.append(gain / gain.sum() if gain.sum() > 0 else gain)
+    return np.concatenate(probs), np.vstack(gains)
