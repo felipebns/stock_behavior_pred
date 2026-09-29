@@ -25,3 +25,7 @@ def test_backtest_period_and_model_defaults():
     assert pd.Timestamp(CONFIG.price_start) < pd.Timestamp(CONFIG.backtest_start)
     assert CONFIG.benchmark_ticker == "^SP500TR" and CONFIG.risk_free_ticker == "^IRX"
     assert "min_child_samples" not in LGBM_PARAMS and LGBM_PARAMS["n_jobs"] == 1
+
+
+def test_run_defaults():
+    assert (CONFIG.horizon_days, CONFIG.train_window_days, CONFIG.retrain_every) == (5, 21, 1)

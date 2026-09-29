@@ -45,7 +45,9 @@ class Config:
     backtest_start: str = "2020-01-02"
     benchmark_ticker: str = "^SP500TR"
     risk_free_ticker: str = "^IRX"
+    horizon_days: int = 5
     train_window_days: int = 21
+    retrain_every: int = 1
     threshold: float = 0.55
     cost_bps: float = 5.0
     min_history_days: int = 63

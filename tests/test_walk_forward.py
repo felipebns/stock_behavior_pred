@@ -98,6 +98,51 @@ def test_window_too_long_for_the_start_date_is_refused():
         run_spy(spy_dataset(), window=6, start=DATES[8])
 
 
+def test_horizon_spaces_decisions_and_moves_the_training_rows_back():
+    run_spy(spy_dataset(), window=3, horizon=2)
+    fits = [days for kind, days, _ in Spy.log if kind == "fit"]
+    predicts = [days for kind, days, _ in Spy.log if kind == "predict"]
+    decisions = [7, 9, 11, 13]
+    assert predicts == [[k] for k in decisions]
+    assert fits == [list(range(k - 2 - 3, k - 2)) for k in decisions]
+
+
+def test_one_fit_serves_retrain_every_consecutive_decisions():
+    result = run_spy(spy_dataset(), window=3, horizon=2, retrain_every=3)
+    assert [kind for kind, _, _ in Spy.log] == ["fit", "predict", "predict", "predict", "fit", "predict"]
+    assert [days for kind, days, _ in Spy.log if kind == "fit"] == [[2, 3, 4], [8, 9, 10]]
+    assert list(result.importance.index) == [DATES[7], DATES[13]]
+    assert sorted(result.predictions["date"].unique()) == [DATES[k] for k in (7, 9, 11, 13)]
+
+
+def test_the_maximum_window_accounts_for_the_horizon():
+    with pytest.raises(ValueError, match="máximo é 4"):
+        run_spy(spy_dataset(), window=5, horizon=2, start=DATES[8])
+
+
+class Echo:
+    """Predicts, for each row, its own first feature: every probability must land on its own (date, ticker) row."""
+
+    def __init__(self, **params):
+        pass
+
+    def fit(self, X, y):
+        self.feature_importances_ = np.ones(X.shape[1])
+        return self
+
+    def predict_proba(self, X):
+        return np.column_stack([1 - X[:, 0], X[:, 0]])
+
+
+def test_each_probability_lands_on_its_own_row():
+    dataset, dates = random_dataset(n_days=30, n_tickers=7)
+    dataset["a"] = np.random.default_rng(1).uniform(size=len(dataset)).astype(np.float32)
+    predictions = WalkForward(5, {}, horizon=2, retrain_every=3, n_jobs=2, model_class=Echo).run(
+        dataset, ["a", "b"], dates).predictions
+    rows = pd.MultiIndex.from_frame(predictions[["date", "ticker"]])
+    np.testing.assert_array_equal(predictions["prob"].to_numpy(), dataset.loc[rows, "a"].to_numpy())
+
+
 def test_progress_reaches_one():
     seen = []
     Spy.log = []
@@ -105,11 +150,13 @@ def test_progress_reaches_one():
     assert seen == sorted(seen) and seen[-1] == pytest.approx(1.0)
 
 
-def test_parallel_run_is_identical_to_sequential():
+@pytest.mark.parametrize("horizon, retrain_every", [(1, 1), (3, 2)])
+def test_parallel_run_is_identical_to_sequential(horizon, retrain_every):
     dataset, dates = random_dataset()
     params = {**LGBM_PARAMS, "n_estimators": 20}
-    sequential = WalkForward(10, params, n_jobs=1).run(dataset, ["a", "b", "c"], dates)
-    parallel = WalkForward(10, params, n_jobs=2).run(dataset, ["a", "b", "c"], dates)
+    options = {"horizon": horizon, "retrain_every": retrain_every}
+    sequential = WalkForward(10, params, n_jobs=1, **options).run(dataset, ["a", "b", "c"], dates)
+    parallel = WalkForward(10, params, n_jobs=2, **options).run(dataset, ["a", "b", "c"], dates)
     pd.testing.assert_frame_equal(sequential.predictions, parallel.predictions, check_exact=True)
     pd.testing.assert_frame_equal(sequential.importance, parallel.importance, check_exact=True)
     assert ((sequential.predictions["prob"] > 0) & (sequential.predictions["prob"] < 1)).all()

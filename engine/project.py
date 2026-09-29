@@ -1,4 +1,4 @@
-"""What the CLI and the app do: download inputs, build features once, run one walk-forward per window, load results."""
+"""What the CLI and the app do: download inputs, build features once, run one walk-forward per run key, load results."""
 import dataclasses
 import io
 import json
@@ -12,23 +12,43 @@ from pathlib import Path
 import pandas as pd
 
 from config.config import REASSIGNED_TICKERS, TICKER_ALIASES, Config
-from engine.dataset import build_dataset
+from engine.dataset import build_dataset, horizon_target
 from engine.features import FEATURES, FeatureBuilder
 from engine.prices import PriceData, daily_total_return, forward_open_return
 from engine.universe import Universe
-from engine.walk_forward import WalkForward
+from engine.walk_forward import MODELS, WalkForward
 
 PACKAGES = ("pandas", "numpy", "lightgbm", "scikit-learn", "joblib", "yfinance", "streamlit")
 # Config fields that decide what is saved: features or runs made with other values are not reused.
 FEATURE_SETTINGS = ("price_start", "benchmark_ticker", "risk_free_ticker", "min_history_days", "peer_count",
                     "peer_lookback_days", "risk_free_max_staleness_days")
 RUN_SETTINGS = ("backtest_start", "min_child_share", "min_child_floor", "lgbm_params")
+FEATURES_FORMAT = 2  # bump when the saved features change shape: features saved in another format are rebuilt
+
+
+@dataclass(frozen=True, order=True)
+class RunKey:
+    """A run: decide every `horizon` sessions, train on the last `window` sessions of rows, refit every
+    `retrain_every` decisions."""
+    horizon: int
+    window: int
+    retrain_every: int = 1
+    model: str = "lightgbm"
+
+    @property
+    def name(self) -> str:
+        return f"{self.model}-h{self.horizon}-w{self.window}-k{self.retrain_every}"
+
+    @property
+    def label(self) -> str:
+        return f"h={self.horizon} · janela {self.window} · retreino a cada {self.retrain_every}"
 
 
 @dataclass
 class FeatureSet:
     dataset: pd.DataFrame | None
     market: pd.DataFrame
+    returns: pd.DataFrame
     coverage: pd.DataFrame
     quality: dict
 
@@ -39,7 +59,7 @@ class FeatureSet:
 
 @dataclass
 class RunResults:
-    window: int
+    key: RunKey
     predictions: pd.DataFrame
     importance: pd.DataFrame
     info: dict
@@ -75,11 +95,12 @@ class Project:
         if universe is None or prices is None:
             universe, prices = self._load_inputs()
         features = self._make_features(universe, prices)
-        features.quality.update(settings=self._settings(FEATURE_SETTINGS), built_at=time.time_ns())
+        features.quality.update(settings=self._feature_settings(), built_at=time.time_ns())
         self._clear(self.features_dir, self.runs_dir)
         self.features_dir.mkdir(parents=True)
         features.dataset.to_parquet(self.features_dir / "dataset.parquet")
         features.market.to_parquet(self.features_dir / "market.parquet")
+        features.returns.to_parquet(self.features_dir / "returns.parquet")
         features.coverage.to_parquet(self.features_dir / "coverage.parquet")
         (self.features_dir / "quality.json").write_text(json.dumps(features.quality, indent=2, default=str))
         return features
@@ -92,18 +113,22 @@ class Project:
         return FeatureSet(
             dataset=pd.read_parquet(self.features_dir / "dataset.parquet") if with_dataset else None,
             market=pd.read_parquet(self.features_dir / "market.parquet"),
+            returns=pd.read_parquet(self.features_dir / "returns.parquet"),
             coverage=pd.read_parquet(self.features_dir / "coverage.parquet"),
             quality=quality,
         )
 
-    def run(self, window: int, progress=None) -> RunResults:
+    def run(self, key: RunKey, progress=None) -> RunResults:
         c = self.config
         features = self.features()
+        dataset = features.dataset.join(horizon_target(features.dataset, features.returns, key.horizon))
         started = time.perf_counter()
-        result = WalkForward(window, c.lgbm_params, c.min_child_share, c.min_child_floor, c.n_jobs).run(
-            features.dataset, FEATURES, features.calendar, start=c.backtest_start, progress=progress)
-        results = RunResults(window, result.predictions, result.importance, info={
-            "window": window,
+        walk_forward = WalkForward(key.window, c.lgbm_params, horizon=key.horizon, retrain_every=key.retrain_every,
+                                   min_child_share=c.min_child_share, min_child_floor=c.min_child_floor,
+                                   n_jobs=c.n_jobs, model_class=MODELS[key.model])
+        result = walk_forward.run(dataset, FEATURES, features.calendar, start=c.backtest_start, progress=progress)
+        results = RunResults(key, result.predictions, result.importance, info={
+            "key": dataclasses.asdict(key),
             "features": FEATURES,
             "runtime_minutes": round((time.perf_counter() - started) / 60.0, 2),
             "generated_at": pd.Timestamp.now().isoformat(timespec="seconds"),
@@ -117,47 +142,50 @@ class Project:
         return results
 
     def save_run(self, results: RunResults) -> None:
-        folder = self._run_dir(results.window)
+        folder = self._run_dir(results.key)
         folder.mkdir(parents=True, exist_ok=True)
         results.predictions.to_parquet(folder / "predictions.parquet")
         results.importance.to_parquet(folder / "importance.parquet")
         (folder / "run_info.json").write_text(json.dumps(results.info, indent=2, default=str))
 
-    def load_run(self, window: int) -> RunResults:
-        folder = self._run_dir(window)
-        return RunResults(window, pd.read_parquet(folder / "predictions.parquet"),
+    def load_run(self, key: RunKey) -> RunResults:
+        folder = self._run_dir(key)
+        return RunResults(key, pd.read_parquet(folder / "predictions.parquet"),
                           pd.read_parquet(folder / "importance.parquet"), json.loads((folder / "run_info.json").read_text()))
 
-    def runs(self) -> list[int]:
-        """Windows run with the current settings on the current features; any other run is stale."""
+    def runs(self) -> list[RunKey]:
+        """Runs made with the current settings on the current features; any other run is stale."""
         quality = self._current_quality()
         if quality is None:
             return []
         expected = {"settings": self._settings(RUN_SETTINGS), "features_built_at": quality["built_at"]}
-        windows = []
-        for path in self.runs_dir.glob("w*/run_info.json"):
+        keys = []
+        for path in self.runs_dir.glob("*/run_info.json"):
             info = json.loads(path.read_text())
-            if all(info.get(key) == value for key, value in expected.items()):
-                windows.append(int(path.parent.name[1:]))
-        return sorted(windows)
+            if "key" in info and all(info.get(name) == value for name, value in expected.items()):
+                keys.append(RunKey(**info["key"]))
+        return sorted(keys)
 
-    def stamp(self, window: int | None = None) -> int:
+    def stamp(self, key: RunKey | None = None) -> int:
         """mtime of the file written last (quality.json / run_info.json); 0 when absent. Keys the app caches."""
-        path = self.features_dir / "quality.json" if window is None else self._run_dir(window) / "run_info.json"
+        path = self.features_dir / "quality.json" if key is None else self._run_dir(key) / "run_info.json"
         return path.stat().st_mtime_ns if path.exists() else 0
 
     def _settings(self, names: tuple[str, ...]) -> dict:
         """Those config values as they read back from JSON, so saved and current settings compare equal."""
         return json.loads(json.dumps({name: getattr(self.config, name) for name in names}))
 
+    def _feature_settings(self) -> dict:
+        return {"format": FEATURES_FORMAT, **self._settings(FEATURE_SETTINGS)}
+
     def _current_quality(self) -> dict | None:
         """quality.json of the saved features, or None when absent or built with other settings."""
         path = self.features_dir / "quality.json"
         quality = json.loads(path.read_text()) if path.exists() else {}
-        return quality if quality.get("settings") == self._settings(FEATURE_SETTINGS) else None
+        return quality if quality.get("settings") == self._feature_settings() else None
 
-    def _run_dir(self, window: int) -> Path:
-        return self.runs_dir / f"w{window:03d}"
+    def _run_dir(self, key: RunKey) -> Path:
+        return self.runs_dir / key.name
 
     def _load_inputs(self) -> tuple[Universe, PriceData]:
         c = self.config
@@ -177,8 +205,8 @@ class Project:
         membership = universe.membership(calendar, tickers)
         ticker_features, date_features = FeatureBuilder(c.peer_count, c.peer_lookback_days).build(
             panel, prices.series(c.benchmark_ticker, "close", calendar), membership)
-        dataset = build_dataset(ticker_features, date_features, membership, panel.close,
-                                forward_open_return(panel.open, panel.dividends), c.min_history_days)
+        returns = forward_open_return(panel.open, panel.dividends)
+        dataset = build_dataset(ticker_features, date_features, membership, panel.close, c.min_history_days)
         market = pd.DataFrame({
             "holding_date": pd.Series(calendar, index=calendar).shift(-1),
             "bench_fwd_ret": forward_open_return(prices.series(c.benchmark_ticker, "open", calendar)),
@@ -191,7 +219,7 @@ class Project:
             "n_eligible": dataset.groupby(level="date").size().reindex(calendar, fill_value=0).to_numpy(),
         }, index=calendar)
         quality = _quality(universe, calendar, wanted, tickers, panel, membership, dataset, coverage)
-        return FeatureSet(dataset, market, coverage, quality)
+        return FeatureSet(dataset, market, returns, coverage, quality)
 
 
 def _quality(universe, calendar, wanted, tickers, panel, membership, dataset, coverage) -> dict:

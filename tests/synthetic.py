@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 
 from config.config import Config
+from engine.project import RunKey
 
 BENCH = "^SP500TR"
 RF = "^IRX"
@@ -66,13 +67,16 @@ SMALL_LGBM = {
     "force_col_wise": True, "n_jobs": 1, "verbose": -1,
 }
 
+RUNS = (RunKey(1, 40), RunKey(5, 40, 2))
+
 
 def synthetic_config(root, **overrides) -> Config:
     """Decisions start at business day 210 of the synthetic market; features are complete from day ~160."""
     start = pd.bdate_range("2019-01-01", periods=330)[210]
     settings = {
         "data_in": root / "in", "data_out": root / "out", "price_start": "2019-01-01",
-        "backtest_start": str(start.date()), "train_window_days": 40, "peer_count": 3,
+        "backtest_start": str(start.date()), "horizon_days": 1, "train_window_days": 40, "retrain_every": 1,
+        "peer_count": 3,
         "peer_lookback_days": 21, "n_jobs": 1, "lgbm_params": SMALL_LGBM,
     }
     return Config(**{**settings, **overrides})

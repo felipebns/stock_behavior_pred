@@ -1,14 +1,15 @@
 import dataclasses
+import json
 import re
 
 import numpy as np
 import pandas as pd
 import pytest
-from synthetic import BENCH, RF, make_market, perturb_after, synthetic_config, yahoo_response
+from synthetic import BENCH, RF, RUNS, make_market, perturb_after, synthetic_config, yahoo_response
 
 from engine.features import DATE_FEATURES, FEATURES
 from engine.prices import PriceData, clean_prices
-from engine.project import Project
+from engine.project import FEATURES_FORMAT, Project, RunKey
 from engine.universe import Universe
 
 CONSTITUENTS = b'date,tickers\n2019-06-03,"AAA,BRK.B,GONE"\n2020-01-02,"AAA,BRK.B,NEWCO"\n'
@@ -27,28 +28,105 @@ def build(raw: dict, root, **overrides) -> Project:
     return project
 
 
-def test_predictions_do_not_depend_on_future_data(synthetic_project, tmp_path):
-    base = synthetic_project.load_run(40).predictions
-    decision_dates = base["date"].drop_duplicates().sort_values()
-    cutoff = decision_dates.iloc[len(decision_dates) // 2]
-    perturbed = build(perturb_after(make_market(), cutoff), tmp_path, n_jobs=2).run(40).predictions
+@pytest.mark.parametrize("key", RUNS)
+def test_predictions_do_not_depend_on_future_data(synthetic_project, tmp_path, key):
+    base = synthetic_project.load_run(key)
+    fits = base.importance.index
+    cutoff = fits[len(fits) // 2]
+    perturbed = build(perturb_after(make_market(), cutoff), tmp_path, n_jobs=2).run(key).predictions
     columns = ["date", "ticker", "prob"]
-    before = base.loc[base["date"] <= cutoff, columns].reset_index(drop=True)
+    predictions = base.predictions
+    before = predictions.loc[predictions["date"] <= cutoff, columns].reset_index(drop=True)
     after = perturbed.loc[perturbed["date"] <= cutoff, columns].reset_index(drop=True)
     pd.testing.assert_frame_equal(before, after, check_exact=True)
-    later = base[base["date"] > cutoff].merge(perturbed[perturbed["date"] > cutoff], on=["date", "ticker"], suffixes=("_base", "_pert"))
+    later = predictions[predictions["date"] > cutoff].merge(perturbed[perturbed["date"] > cutoff], on=["date", "ticker"],
+                                                             suffixes=("_base", "_pert"))
     assert len(later) > 0 and not np.allclose(later["prob_base"], later["prob_pert"])
 
 
-def test_predictions_only_for_members_on_each_date(synthetic_project):
+@pytest.mark.parametrize("key", RUNS)
+def test_predictions_only_for_members_on_each_date(synthetic_project, key):
     universe = Universe(make_market()["snapshots"])
-    for date, group in synthetic_project.load_run(40).predictions.groupby("date"):
+    for date, group in synthetic_project.load_run(key).predictions.groupby("date"):
         assert set(group["ticker"]) <= set(universe.members_on(date))
 
 
-def test_decisions_start_at_backtest_start(synthetic_project):
-    predictions = synthetic_project.load_run(40).predictions
-    assert predictions["date"].min() == pd.Timestamp(synthetic_project.config.backtest_start)
+@pytest.mark.parametrize("key", RUNS)
+def test_decisions_start_at_backtest_start_and_follow_the_horizon(synthetic_project, key):
+    predictions = synthetic_project.load_run(key).predictions
+    calendar = synthetic_project.features(with_dataset=False).calendar
+    positions = calendar.get_indexer(sorted(predictions["date"].unique()))
+    assert calendar[positions[0]] == pd.Timestamp(synthetic_project.config.backtest_start)
+    assert set(np.diff(positions)) == {key.horizon}
+
+
+@pytest.mark.parametrize("key", RUNS)
+def test_labels_are_relative_to_the_median_of_each_date(synthetic_project, key):
+    known = synthetic_project.load_run(key).predictions.dropna(subset=["label"])
+    share = known.groupby("date")["label"].mean()
+    assert share.between(0.4, 0.5).all()
+    median = known.groupby("date")["fwd_ret"].transform("median")
+    assert (known["label"] == (known["fwd_ret"] > median)).all()
+
+
+def test_features_are_saved_with_every_column(synthetic_project):
+    features = synthetic_project.features()
+    assert list(features.dataset.columns) == FEATURES
+    assert features.dataset[DATE_FEATURES].notna().all().all()
+    assert features.returns.index.equals(features.calendar)
+    assert set(features.dataset.index.get_level_values("ticker")) <= set(features.returns.columns)
+    assert features.quality["settings"]["format"] == FEATURES_FORMAT
+    assert synthetic_project.features(with_dataset=False).dataset is None
+
+
+def test_runs_are_saved_per_key_and_listed(synthetic_project):
+    assert synthetic_project.runs() == list(RUNS)
+    run = synthetic_project.load_run(RUNS[1])
+    assert run.info["key"] == dataclasses.asdict(RUNS[1])
+    assert list(run.importance.columns) == FEATURES
+    assert (synthetic_project.runs_dir / "lightgbm-h5-w40-k2" / "run_info.json").exists()
+    assert synthetic_project.stamp(RUNS[1]) > 0 and synthetic_project.stamp(RunKey(1, 21)) == 0
+    assert RUNS[1].label == "h=5 · janela 40 · retreino a cada 2"
+
+
+def test_rebuilding_features_deletes_old_runs(tmp_path):
+    project = build(make_market(), tmp_path)
+    project.run(RUNS[0])
+    assert project.runs() == [RUNS[0]]
+    raw = make_market()
+    project.build_features(Universe(raw["snapshots"]), PriceData(clean_prices(raw["prices"])))
+    assert not project.runs_dir.exists()
+
+
+def test_window_too_long_is_refused(synthetic_project):
+    with pytest.raises(ValueError, match="máximo"):
+        synthetic_project.run(RunKey(1, 100))
+    assert synthetic_project.runs() == list(RUNS)
+
+
+def test_features_saved_in_an_older_format_are_rebuilt(tmp_path):
+    write_inputs(make_market(), tmp_path)
+    project = Project(synthetic_config(tmp_path))
+    project.features(with_dataset=False)
+    path = project.features_dir / "quality.json"
+    quality = json.loads(path.read_text())
+    quality["settings"]["format"] = FEATURES_FORMAT - 1
+    path.write_text(json.dumps(quality))
+    assert project.features(with_dataset=False).quality["settings"]["format"] == FEATURES_FORMAT
+
+
+def test_runs_made_with_other_training_settings_are_hidden(synthetic_project):
+    assert Project(dataclasses.replace(synthetic_project.config, min_child_floor=5)).runs() == []
+    assert synthetic_project.runs() == list(RUNS)
+
+
+def test_a_run_saved_after_its_features_were_replaced_is_hidden(tmp_path):
+    raw = make_market()
+    project = build(raw, tmp_path)
+    stale = project.run(RunKey(1, 5))
+    project.build_features(Universe(raw["snapshots"]), PriceData(clean_prices(raw["prices"])))
+    project.save_run(stale)
+    assert project.runs() == []
 
 
 def test_market_frame_aligns_benchmark_and_risk_free(synthetic_project):
@@ -61,13 +139,6 @@ def test_market_frame_aligns_benchmark_and_risk_free(synthetic_project):
     assert market.loc[t, "bench_fwd_ret"] == pytest.approx(bench_open[calendar[102]] / bench_open[calendar[101]] - 1)
     assert market.loc[t, "rf_daily"] == pytest.approx(irx[t] / 100 / 252)
     assert pd.isna(market["holding_date"].iloc[-1]) and pd.isna(market["bench_fwd_ret"].iloc[-2])
-
-
-def test_features_are_saved_with_every_column(synthetic_project):
-    features = synthetic_project.features()
-    assert list(features.dataset.columns) == FEATURES + ["fwd_ret", "label"]
-    assert features.dataset[DATE_FEATURES].notna().all().all()
-    assert synthetic_project.features(with_dataset=False).dataset is None
 
 
 def test_quality_reports_members_without_usable_history(tmp_path):
@@ -86,33 +157,10 @@ def test_quality_reports_members_without_usable_history(tmp_path):
     assert all(0 < share <= 1 for share in quality["coverage_by_year"].values())
 
 
-def test_runs_are_saved_per_window_and_listed(synthetic_project):
-    assert synthetic_project.runs() == [40]
-    run = synthetic_project.load_run(40)
-    assert run.info["window"] == 40
-    assert list(run.importance.columns) == FEATURES
-    assert synthetic_project.stamp(40) > 0 and synthetic_project.stamp(21) == 0
-
-
-def test_rebuilding_features_deletes_old_runs(tmp_path):
-    project = build(make_market(), tmp_path)
-    project.run(40)
-    assert project.runs() == [40]
-    raw = make_market()
-    project.build_features(Universe(raw["snapshots"]), PriceData(clean_prices(raw["prices"])))
-    assert not project.runs_dir.exists()
-
-
-def test_window_too_long_is_refused(synthetic_project):
-    with pytest.raises(ValueError, match="máximo"):
-        synthetic_project.run(100)
-    assert synthetic_project.runs() == [40]
-
-
 def test_download_saves_inputs_and_clears_derived_results(tmp_path):
     project = Project(synthetic_config(tmp_path))
-    (project.runs_dir / "w021").mkdir(parents=True)
-    (project.runs_dir / "w021" / "run_info.json").write_text("{}")
+    (project.runs_dir / "lightgbm-h5-w21-k1").mkdir(parents=True)
+    (project.runs_dir / "lightgbm-h5-w21-k1" / "run_info.json").write_text("{}")
     failed = project.download(
         price_downloader=lambda tickers, **kwargs: yahoo_response(tickers, ["2024-01-02", "2024-01-03"], skip={"GONE"}),
         fetch=lambda url: CONSTITUENTS,
@@ -158,22 +206,8 @@ def test_features_are_rebuilt_when_their_settings_change(tmp_path):
     built = project.stamp()
     Project(synthetic_config(tmp_path)).features(with_dataset=False)
     assert project.stamp() == built
-    (project.runs_dir / "w040").mkdir(parents=True)
-    (project.runs_dir / "w040" / "run_info.json").write_text("{}")
+    (project.runs_dir / "lightgbm-h1-w40-k1").mkdir(parents=True)
+    (project.runs_dir / "lightgbm-h1-w40-k1" / "run_info.json").write_text("{}")
     quality = Project(synthetic_config(tmp_path, peer_count=2)).features(with_dataset=False).quality
     assert quality["settings"]["peer_count"] == 2
     assert project.stamp() != built and not project.runs_dir.exists()
-
-
-def test_runs_made_with_other_training_settings_are_hidden(synthetic_project):
-    assert Project(dataclasses.replace(synthetic_project.config, min_child_floor=5)).runs() == []
-    assert synthetic_project.runs() == [40]
-
-
-def test_a_run_saved_after_its_features_were_replaced_is_hidden(tmp_path):
-    raw = make_market()
-    project = build(raw, tmp_path)
-    stale = project.run(5)
-    project.build_features(Universe(raw["snapshots"]), PriceData(clean_prices(raw["prices"])))
-    project.save_run(stale)
-    assert project.runs() == []

@@ -1,5 +1,5 @@
 import pytest
-from synthetic import BENCH, RF, make_market, synthetic_config
+from synthetic import BENCH, RF, RUNS, make_market, synthetic_config
 
 from engine.prices import PriceData, clean_prices
 from engine.project import Project
@@ -21,5 +21,6 @@ def synthetic_project(tmp_path_factory):
     raw = make_market()
     project = Project(synthetic_config(tmp_path_factory.mktemp("project")))
     project.build_features(Universe(raw["snapshots"]), PriceData(clean_prices(raw["prices"])))
-    project.run(40)
+    for key in RUNS:
+        project.run(key)
     return project

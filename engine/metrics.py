@@ -32,12 +32,13 @@ def daily_ic(predictions: pd.DataFrame) -> pd.Series:
 
 
 def model_metrics(predictions: pd.DataFrame) -> dict[str, float]:
+    """NaN where there is nothing to measure: no known outcome yet, or a single class."""
     known = predictions.dropna(subset=["label"])
     label, prob = known["label"].astype(int), known["prob"]
     return {
-        "auc": float(roc_auc_score(label, prob)),
-        "accuracy": float(((prob > 0.5).astype(int) == label).mean()),
-        "ic": float(daily_ic(known).mean()),
+        "auc": float(roc_auc_score(label, prob)) if label.nunique() == 2 else float("nan"),
+        "accuracy": float(((prob > 0.5).astype(int) == label).mean()) if len(known) else float("nan"),
+        "ic": float(daily_ic(known).mean()) if len(known) else float("nan"),
     }
 
 
@@ -48,3 +49,31 @@ def monthly_auc(predictions: pd.DataFrame) -> pd.Series:
         return float(roc_auc_score(period["label"], period["prob"])) if period["label"].nunique() == 2 else float("nan")
 
     return known.groupby(pd.Grouper(key="date", freq="ME"))[["label", "prob"]].apply(auc)
+
+
+def _ranked(predictions: pd.DataFrame) -> pd.DataFrame:
+    """Rows with a known outcome, with the return relative to the day's median and the probability rank and decile that day."""
+    known = predictions.dropna(subset=["label"])
+    by_date = known.groupby("date")
+    rank = by_date["prob"].rank(method="first")
+    size = by_date["prob"].transform("size")
+    return known.assign(
+        relative=known["fwd_ret"] - by_date["fwd_ret"].transform("median"),
+        rank=rank, size=size, decile=np.ceil(10 * rank / size).astype(int),
+    )
+
+
+def deciles(predictions: pd.DataFrame) -> pd.DataFrame:
+    """Per probability decile (1 = lowest that day): mean prob, share that beat the median and return relative to it —
+    averaged within each date first, then across dates."""
+    per_day = _ranked(predictions).groupby(["date", "decile"])[["prob", "label", "relative"]].mean()
+    return per_day.groupby(level="decile").mean()
+
+
+def decile_spread(predictions: pd.DataFrame) -> pd.Series:
+    """Per decision date: mean return of the top 10% by probability minus the bottom 10% (at least one stock each)."""
+    ranked = _ranked(predictions)
+    side = np.maximum(1, ranked["size"] // 10)
+    top = ranked[ranked["rank"] > ranked["size"] - side].groupby("date")["fwd_ret"].mean()
+    bottom = ranked[ranked["rank"] <= side].groupby("date")["fwd_ret"].mean()
+    return top - bottom

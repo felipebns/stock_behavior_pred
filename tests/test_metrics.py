@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from engine.metrics import drawdown, model_metrics, monthly_auc, performance_metrics
+from engine.metrics import decile_spread, deciles, drawdown, model_metrics, monthly_auc, performance_metrics
 
 
 def series(values) -> pd.Series:
@@ -62,3 +62,47 @@ def test_monthly_auc():
         "label": [0, 0, 1, 1, 1, 1, 0, 0],
     })
     assert monthly_auc(predictions).tolist() == pytest.approx([1.0, 0.0])
+
+
+def test_model_metrics_without_known_outcomes_are_nan():
+    empty = pd.DataFrame({"date": pd.to_datetime(["2022-01-03"] * 2), "prob": [0.4, 0.6],
+                          "fwd_ret": [np.nan, np.nan], "label": [np.nan, np.nan]})
+    assert all(np.isnan(value) for value in model_metrics(empty).values())
+    one_class = empty.assign(fwd_ret=[0.01, 0.02], label=[1.0, 1.0])
+    assert np.isnan(model_metrics(one_class)["auc"])
+
+
+def ranked_predictions(n_stocks: int = 10) -> pd.DataFrame:
+    """Two dates; prob rises with i; returns rise with i on the first date and fall on the second."""
+    rows = [
+        {"date": date, "ticker": f"T{i}", "prob": (i + 0.5) / n_stocks, "fwd_ret": sign * 0.01 * i}
+        for date, sign in zip(pd.to_datetime(["2022-01-03", "2022-01-10"]), [1, -1])
+        for i in range(n_stocks)
+    ]
+    frame = pd.DataFrame(rows)
+    return frame.assign(label=(frame["fwd_ret"] > frame.groupby("date")["fwd_ret"].transform("median")).astype(float))
+
+
+def test_deciles_average_within_each_date_then_across_dates():
+    table = deciles(ranked_predictions())
+    assert list(table.index) == list(range(1, 11))
+    assert list(table.columns) == ["prob", "label", "relative"]
+    assert table["prob"].tolist() == pytest.approx([(i + 0.5) / 10 for i in range(10)])
+    assert table["label"].tolist() == pytest.approx([0.5] * 10)
+    assert table["relative"].tolist() == pytest.approx([0.0] * 10)
+
+
+def test_decile_spread_is_top_minus_bottom_per_date():
+    spread = decile_spread(ranked_predictions())
+    assert list(spread.index) == list(pd.to_datetime(["2022-01-03", "2022-01-10"]))
+    assert spread.tolist() == pytest.approx([0.09, -0.09])
+
+
+def test_decile_spread_uses_at_least_one_stock_per_side():
+    assert decile_spread(ranked_predictions(5)).tolist() == pytest.approx([0.04, -0.04])
+
+
+def test_rows_with_unknown_outcome_are_left_out_of_the_deciles():
+    predictions = ranked_predictions()
+    predictions.loc[predictions["ticker"] == "T9", ["fwd_ret", "label"]] = np.nan
+    assert decile_spread(predictions).tolist() == pytest.approx([0.08, -0.08])
