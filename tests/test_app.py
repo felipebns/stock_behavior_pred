@@ -12,22 +12,22 @@ from engine.project import Project, RunKey, RunResults
 from engine.universe import Universe
 
 APP = Path(__file__).resolve().parent.parent / "app" / "dashboard.py"
-TABS = ["Visão geral", "Previsto vs realizado", "Carteira por decisão", "Recortes de período", "Runs", "Modelo"]
+TABS = ["Visão geral", "Previsto vs realizado", "Carteira por dia", "Recortes de período", "Runs", "Modelo"]
 
 
 def open_app(project: Project, monkeypatch, key: RunKey = RUNS[0]) -> AppTest:
     """The app with the project's own config and the run key typed in the sidebar."""
     monkeypatch.setattr("config.config.CONFIG", project.config)
     at = AppTest.from_file(str(APP), default_timeout=120).run()
-    for field, value in zip(at.sidebar.number_input, (key.horizon, key.window, key.retrain_every)):
+    for field, value in zip(at.sidebar.number_input, (key.window, key.retrain_every)):
         field.set_value(value)
     return at.run()
 
 
 def backtest(project: Project, key: RunKey, predictions: pd.DataFrame | None = None):
-    features = project.features(with_dataset=False)
+    market = project.features(with_dataset=False).market
     predictions = project.load_run(key).predictions if predictions is None else predictions
-    return Portfolio(0.55).backtest(predictions, features.market, features.returns, key.horizon)
+    return Portfolio(0.55).backtest(predictions, market)
 
 
 @pytest.mark.parametrize("key", RUNS)
@@ -44,7 +44,7 @@ def test_dashboard_survives_threshold_nobody_passes(synthetic_project, monkeypat
 
 
 def test_run_not_made_yet_offers_the_button(synthetic_project, monkeypatch):
-    key = RunKey(1, 21)
+    key = RunKey(21)
     at = open_app(synthetic_project, monkeypatch, key)
     assert not at.exception
     assert f"Rodar {key.label}" in [button.label for button in at.sidebar.button]
@@ -91,36 +91,35 @@ def test_periods_tab_shows_model_metrics_per_period(synthetic_project, monkeypat
 def test_signal_tab_shows_the_decile_table(synthetic_project, monkeypatch):
     key = RUNS[1]
     at = open_app(synthetic_project, monkeypatch, key)
-    table = next(frame.value for frame in at.dataframe if "Bateu a mediana" in frame.value.columns)
+    table = next(frame.value for frame in at.dataframe if "Subiu" in frame.value.columns)
     expected = metrics.deciles(synthetic_project.load_run(key).predictions)
     assert list(table.index) == list(expected.index)
     assert table["Prob. média"].to_numpy() == pytest.approx(expected["prob"].to_numpy())
 
 
-def test_decision_tab_shows_what_was_bought_and_what_happened(synthetic_project, monkeypatch):
+def test_day_tab_shows_what_was_bought_and_what_happened(synthetic_project, monkeypatch):
     key = RUNS[1]
     result = backtest(synthetic_project, key)
-    decisions = list(result.daily["decision_date"].unique())
+    days = list(result.daily.index)
     at = open_app(synthetic_project, monkeypatch, key)
-    at.selectbox[0].set_value(decisions.index(result.positions["decision_date"].iloc[-1])).run()
-    held = next(frame.value for frame in at.dataframe if "Bateu a mediana?" in frame.value.columns)
-    assert {"Prob. prevista", "Retorno no período", "Acima da mediana", "Contribuição"} <= set(held.columns)
+    at.selectbox[0].set_value(days.index(result.positions["holding_date"].iloc[-1])).run()
+    held = next(frame.value for frame in at.dataframe if "Subiu?" in frame.value.columns)
+    assert {"Prob. prevista", "Retorno realizado", "Contribuição"} <= set(held.columns)
     assert any("Soma das contribuições" in info.value for info in at.info)
 
 
 def test_runs_tab_compares_every_run(synthetic_project, monkeypatch):
     at = open_app(synthetic_project, monkeypatch)
-    table = next(frame.value for frame in at.dataframe if "Giro médio por troca" in frame.value.columns)
+    table = next(frame.value for frame in at.dataframe if "Giro médio diário" in frame.value.columns)
     assert list(table.index) == [key.label for key in RUNS]
 
 
-def test_run_without_any_known_outcome_still_renders(tmp_path, monkeypatch):
+def test_run_without_any_realized_day_shows_a_warning(tmp_path, monkeypatch):
     raw = make_market()
     dates = sorted(raw["prices"]["date"].unique())
-    project = Project(synthetic_config(tmp_path, backtest_start=str(dates[-15].date())))
+    project = Project(synthetic_config(tmp_path, backtest_start=str(dates[-2].date())))
     project.build_features(Universe(raw["snapshots"]), PriceData(clean_prices(raw["prices"])))
-    key = RunKey(21, 40)
-    project.run(key)
-    at = open_app(project, monkeypatch, key)
+    project.run(RunKey(40))
+    at = open_app(project, monkeypatch, RunKey(40))
     assert not at.exception
-    assert any("Ainda não há decisão com resultado conhecido" in info.value for info in at.info)
+    assert any("Nenhum dia de carteira" in warning.value for warning in at.warning)

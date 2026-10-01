@@ -28,4 +28,5 @@ def test_backtest_period_and_model_defaults():
 
 
 def test_run_defaults():
-    assert (CONFIG.horizon_days, CONFIG.train_window_days, CONFIG.retrain_every) == (5, 21, 1)
+    assert (CONFIG.train_window_days, CONFIG.retrain_every) == (21, 1)
+    assert not hasattr(CONFIG, "horizon_days")

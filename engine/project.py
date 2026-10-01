@@ -12,7 +12,7 @@ from pathlib import Path
 import pandas as pd
 
 from config.config import REASSIGNED_TICKERS, TICKER_ALIASES, Config
-from engine.dataset import build_dataset, horizon_target
+from engine.dataset import build_dataset
 from engine.features import FEATURES, FeatureBuilder
 from engine.prices import PriceData, daily_total_return, forward_open_return
 from engine.universe import Universe
@@ -23,32 +23,29 @@ PACKAGES = ("pandas", "numpy", "lightgbm", "scikit-learn", "joblib", "yfinance",
 FEATURE_SETTINGS = ("price_start", "benchmark_ticker", "risk_free_ticker", "min_history_days", "peer_count",
                     "peer_lookback_days", "risk_free_max_staleness_days")
 RUN_SETTINGS = ("backtest_start", "min_child_share", "min_child_floor", "lgbm_params")
-FEATURES_FORMAT = 2  # bump when the saved features change shape: features saved in another format are rebuilt
+FEATURES_FORMAT = 3  # bump when the saved features change shape: features saved in another format are rebuilt
 
 
 @dataclass(frozen=True, order=True)
 class RunKey:
-    """A run: decide every `horizon` sessions, train on the last `window` sessions of rows, refit every
-    `retrain_every` decisions."""
-    horizon: int
+    """A run: train on the last `window` sessions of rows, refit every `retrain_every` sessions."""
     window: int
     retrain_every: int = 1
     model: str = "lightgbm"
 
     @property
     def name(self) -> str:
-        return f"{self.model}-h{self.horizon}-w{self.window}-k{self.retrain_every}"
+        return f"{self.model}-w{self.window}-k{self.retrain_every}"
 
     @property
     def label(self) -> str:
-        return f"h={self.horizon} · janela {self.window} · retreino a cada {self.retrain_every}"
+        return f"janela {self.window} · retreino a cada {self.retrain_every}"
 
 
 @dataclass
 class FeatureSet:
     dataset: pd.DataFrame | None
     market: pd.DataFrame
-    returns: pd.DataFrame
     coverage: pd.DataFrame
     quality: dict
 
@@ -100,7 +97,6 @@ class Project:
         self.features_dir.mkdir(parents=True)
         features.dataset.to_parquet(self.features_dir / "dataset.parquet")
         features.market.to_parquet(self.features_dir / "market.parquet")
-        features.returns.to_parquet(self.features_dir / "returns.parquet")
         features.coverage.to_parquet(self.features_dir / "coverage.parquet")
         (self.features_dir / "quality.json").write_text(json.dumps(features.quality, indent=2, default=str))
         return features
@@ -113,7 +109,6 @@ class Project:
         return FeatureSet(
             dataset=pd.read_parquet(self.features_dir / "dataset.parquet") if with_dataset else None,
             market=pd.read_parquet(self.features_dir / "market.parquet"),
-            returns=pd.read_parquet(self.features_dir / "returns.parquet"),
             coverage=pd.read_parquet(self.features_dir / "coverage.parquet"),
             quality=quality,
         )
@@ -121,12 +116,11 @@ class Project:
     def run(self, key: RunKey, progress=None) -> RunResults:
         c = self.config
         features = self.features()
-        dataset = features.dataset.join(horizon_target(features.dataset, features.returns, key.horizon))
         started = time.perf_counter()
-        walk_forward = WalkForward(key.window, c.lgbm_params, horizon=key.horizon, retrain_every=key.retrain_every,
+        walk_forward = WalkForward(key.window, c.lgbm_params, retrain_every=key.retrain_every,
                                    min_child_share=c.min_child_share, min_child_floor=c.min_child_floor,
                                    n_jobs=c.n_jobs, model_class=MODELS[key.model])
-        result = walk_forward.run(dataset, FEATURES, features.calendar, start=c.backtest_start, progress=progress)
+        result = walk_forward.run(features.dataset, FEATURES, features.calendar, start=c.backtest_start, progress=progress)
         results = RunResults(key, result.predictions, result.importance, info={
             "key": dataclasses.asdict(key),
             "features": FEATURES,
@@ -205,8 +199,8 @@ class Project:
         membership = universe.membership(calendar, tickers)
         ticker_features, date_features = FeatureBuilder(c.peer_count, c.peer_lookback_days).build(
             panel, prices.series(c.benchmark_ticker, "close", calendar), membership)
-        returns = forward_open_return(panel.open, panel.dividends)
-        dataset = build_dataset(ticker_features, date_features, membership, panel.close, c.min_history_days)
+        dataset = build_dataset(ticker_features, date_features, membership, panel.close,
+                                forward_open_return(panel.open, panel.dividends), c.min_history_days)
         market = pd.DataFrame({
             "holding_date": pd.Series(calendar, index=calendar).shift(-1),
             "bench_fwd_ret": forward_open_return(prices.series(c.benchmark_ticker, "open", calendar)),
@@ -219,7 +213,7 @@ class Project:
             "n_eligible": dataset.groupby(level="date").size().reindex(calendar, fill_value=0).to_numpy(),
         }, index=calendar)
         quality = _quality(universe, calendar, wanted, tickers, panel, membership, dataset, coverage)
-        return FeatureSet(dataset, market, returns, coverage, quality)
+        return FeatureSet(dataset, market, coverage, quality)
 
 
 def _quality(universe, calendar, wanted, tickers, panel, membership, dataset, coverage) -> dict:

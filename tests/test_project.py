@@ -52,29 +52,24 @@ def test_predictions_only_for_members_on_each_date(synthetic_project, key):
 
 
 @pytest.mark.parametrize("key", RUNS)
-def test_decisions_start_at_backtest_start_and_follow_the_horizon(synthetic_project, key):
+def test_decisions_start_at_backtest_start_and_happen_every_session(synthetic_project, key):
     predictions = synthetic_project.load_run(key).predictions
     calendar = synthetic_project.features(with_dataset=False).calendar
     positions = calendar.get_indexer(sorted(predictions["date"].unique()))
     assert calendar[positions[0]] == pd.Timestamp(synthetic_project.config.backtest_start)
-    assert set(np.diff(positions)) == {key.horizon}
+    assert set(np.diff(positions)) == {1}
 
 
-@pytest.mark.parametrize("key", RUNS)
-def test_labels_are_relative_to_the_median_of_each_date(synthetic_project, key):
-    known = synthetic_project.load_run(key).predictions.dropna(subset=["label"])
-    share = known.groupby("date")["label"].mean()
-    assert share.between(0.4, 0.5).all()
-    median = known.groupby("date")["fwd_ret"].transform("median")
-    assert (known["label"] == (known["fwd_ret"] > median)).all()
+def test_labels_say_whether_the_stock_went_up(synthetic_project):
+    known = synthetic_project.load_run(RUNS[0]).predictions.dropna(subset=["label"])
+    assert (known["label"] == (known["fwd_ret"] > 0)).all()
+    assert 0.3 < known["label"].mean() < 0.7
 
 
 def test_features_are_saved_with_every_column(synthetic_project):
     features = synthetic_project.features()
-    assert list(features.dataset.columns) == FEATURES
+    assert list(features.dataset.columns) == FEATURES + ["fwd_ret", "label"]
     assert features.dataset[DATE_FEATURES].notna().all().all()
-    assert features.returns.index.equals(features.calendar)
-    assert set(features.dataset.index.get_level_values("ticker")) <= set(features.returns.columns)
     assert features.quality["settings"]["format"] == FEATURES_FORMAT
     assert synthetic_project.features(with_dataset=False).dataset is None
 
@@ -84,9 +79,9 @@ def test_runs_are_saved_per_key_and_listed(synthetic_project):
     run = synthetic_project.load_run(RUNS[1])
     assert run.info["key"] == dataclasses.asdict(RUNS[1])
     assert list(run.importance.columns) == FEATURES
-    assert (synthetic_project.runs_dir / "lightgbm-h5-w40-k2" / "run_info.json").exists()
-    assert synthetic_project.stamp(RUNS[1]) > 0 and synthetic_project.stamp(RunKey(1, 21)) == 0
-    assert RUNS[1].label == "h=5 · janela 40 · retreino a cada 2"
+    assert (synthetic_project.runs_dir / "lightgbm-w40-k3" / "run_info.json").exists()
+    assert synthetic_project.stamp(RUNS[1]) > 0 and synthetic_project.stamp(RunKey(21)) == 0
+    assert RUNS[1].label == "janela 40 · retreino a cada 3"
 
 
 def test_rebuilding_features_deletes_old_runs(tmp_path):
@@ -100,7 +95,7 @@ def test_rebuilding_features_deletes_old_runs(tmp_path):
 
 def test_window_too_long_is_refused(synthetic_project):
     with pytest.raises(ValueError, match="máximo"):
-        synthetic_project.run(RunKey(1, 100))
+        synthetic_project.run(RunKey(100))
     assert synthetic_project.runs() == list(RUNS)
 
 
@@ -123,7 +118,7 @@ def test_runs_made_with_other_training_settings_are_hidden(synthetic_project):
 def test_a_run_saved_after_its_features_were_replaced_is_hidden(tmp_path):
     raw = make_market()
     project = build(raw, tmp_path)
-    stale = project.run(RunKey(1, 5))
+    stale = project.run(RunKey(5))
     project.build_features(Universe(raw["snapshots"]), PriceData(clean_prices(raw["prices"])))
     project.save_run(stale)
     assert project.runs() == []
@@ -159,8 +154,8 @@ def test_quality_reports_members_without_usable_history(tmp_path):
 
 def test_download_saves_inputs_and_clears_derived_results(tmp_path):
     project = Project(synthetic_config(tmp_path))
-    (project.runs_dir / "lightgbm-h5-w21-k1").mkdir(parents=True)
-    (project.runs_dir / "lightgbm-h5-w21-k1" / "run_info.json").write_text("{}")
+    (project.runs_dir / "lightgbm-w21-k1").mkdir(parents=True)
+    (project.runs_dir / "lightgbm-w21-k1" / "run_info.json").write_text("{}")
     failed = project.download(
         price_downloader=lambda tickers, **kwargs: yahoo_response(tickers, ["2024-01-02", "2024-01-03"], skip={"GONE"}),
         fetch=lambda url: CONSTITUENTS,
@@ -206,8 +201,8 @@ def test_features_are_rebuilt_when_their_settings_change(tmp_path):
     built = project.stamp()
     Project(synthetic_config(tmp_path)).features(with_dataset=False)
     assert project.stamp() == built
-    (project.runs_dir / "lightgbm-h1-w40-k1").mkdir(parents=True)
-    (project.runs_dir / "lightgbm-h1-w40-k1" / "run_info.json").write_text("{}")
+    (project.runs_dir / "lightgbm-w40-k1").mkdir(parents=True)
+    (project.runs_dir / "lightgbm-w40-k1" / "run_info.json").write_text("{}")
     quality = Project(synthetic_config(tmp_path, peer_count=2)).features(with_dataset=False).quality
     assert quality["settings"]["peer_count"] == 2
     assert project.stamp() != built and not project.runs_dir.exists()

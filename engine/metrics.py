@@ -56,21 +56,18 @@ def monthly_auc(predictions: pd.DataFrame) -> pd.Series:
 
 
 def _ranked(predictions: pd.DataFrame) -> pd.DataFrame:
-    """Rows with a known outcome, with the return relative to the day's median and the probability rank and decile that day."""
+    """Rows with a known outcome, with the probability rank and decile (1 = lowest) that day."""
     known = predictions.dropna(subset=["label"])
     by_date = known.groupby("date")
     rank = by_date["prob"].rank(method="first")
     size = by_date["prob"].transform("size")
-    return known.assign(
-        relative=known["fwd_ret"] - by_date["fwd_ret"].transform("median"),
-        rank=rank, size=size, decile=np.ceil(10 * rank / size).astype(int),
-    )
+    return known.assign(rank=rank, size=size, decile=np.ceil(10 * rank / size).astype(int))
 
 
 def deciles(predictions: pd.DataFrame) -> pd.DataFrame:
-    """Per probability decile (1 = lowest that day): mean prob, share that beat the median and return relative to it —
+    """Per probability decile (1 = lowest that day): mean prob, share that went up and mean next-day return —
     averaged within each date first, then across dates."""
-    per_day = _ranked(predictions).groupby(["date", "decile"])[["prob", "label", "relative"]].mean()
+    per_day = _ranked(predictions).groupby(["date", "decile"])[["prob", "label", "fwd_ret"]].mean()
     return per_day.groupby(level="decile").mean()
 
 

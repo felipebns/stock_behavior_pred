@@ -26,13 +26,14 @@ def market_data(n_days: int = 40, seed: int = 3):
     return opens, dividends, rf_daily
 
 
-def model_output(opens: pd.DataFrame, horizon: int, seed: int = 5) -> pd.DataFrame:
-    """Random probabilities at each decision (every `horizon` sessions); every 4th decision nobody passes."""
+def model_output(opens: pd.DataFrame, dividends: pd.DataFrame, seed: int = 5) -> pd.DataFrame:
+    """Random probabilities every session (with the realized next-day return); every 4th day nobody passes."""
     rng = np.random.default_rng(seed)
+    fwd_ret = forward_open_return(opens, dividends)
     rows = []
-    for k, date in enumerate(opens.index[2:-3:horizon]):
+    for k, date in enumerate(opens.index[2:-3]):
         high = 0.5 if k % 4 == 3 else 0.8
-        rows += [{"date": date, "ticker": t, "prob": rng.uniform(0.3, high)}
+        rows += [{"date": date, "ticker": t, "prob": rng.uniform(0.3, high), "fwd_ret": fwd_ret.at[date, t]}
                  for t in opens.columns if not np.isnan(opens.at[date, t])]
     return pd.DataFrame(rows)
 
@@ -72,12 +73,10 @@ def simulate(opens, dividends, rf_daily, predictions) -> pd.Series:
     return pd.Series(equity)
 
 
-@pytest.mark.parametrize("horizon", [1, 5])
-def test_portfolio_matches_an_event_by_event_simulation(horizon):
+def test_portfolio_matches_an_event_by_event_simulation():
     opens, dividends, rf_daily = market_data()
-    predictions = model_output(opens, horizon)
-    daily = Portfolio(THRESHOLD, COST_BPS).backtest(
-        predictions, market_frame(opens, rf_daily), forward_open_return(opens, dividends), horizon).daily
+    predictions = model_output(opens, dividends)
+    daily = Portfolio(THRESHOLD, COST_BPS).backtest(predictions, market_frame(opens, rf_daily)).daily
     assert daily["invested"].any() and not daily["invested"].all()
     assert daily["n_missing"].sum() > 0 and (daily["turnover"] > 0).sum() > 3
     expected = CAPITAL * (1.0 + daily["net"]).cumprod()

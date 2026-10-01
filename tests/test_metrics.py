@@ -80,16 +80,16 @@ def ranked_predictions(n_stocks: int = 10) -> pd.DataFrame:
         for i in range(n_stocks)
     ]
     frame = pd.DataFrame(rows)
-    return frame.assign(label=(frame["fwd_ret"] > frame.groupby("date")["fwd_ret"].transform("median")).astype(float))
+    return frame.assign(label=(frame["fwd_ret"] > 0).astype(float))
 
 
 def test_deciles_average_within_each_date_then_across_dates():
     table = deciles(ranked_predictions())
     assert list(table.index) == list(range(1, 11))
-    assert list(table.columns) == ["prob", "label", "relative"]
+    assert list(table.columns) == ["prob", "label", "fwd_ret"]
     assert table["prob"].tolist() == pytest.approx([(i + 0.5) / 10 for i in range(10)])
-    assert table["label"].tolist() == pytest.approx([0.5] * 10)
-    assert table["relative"].tolist() == pytest.approx([0.0] * 10)
+    assert table["label"].tolist() == pytest.approx([0.0] + [0.5] * 9)
+    assert table["fwd_ret"].tolist() == pytest.approx([0.0] * 10)
 
 
 def test_decile_spread_is_top_minus_bottom_per_date():

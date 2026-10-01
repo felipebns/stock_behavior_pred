@@ -67,7 +67,7 @@ SMALL_LGBM = {
     "force_col_wise": True, "n_jobs": 1, "verbose": -1,
 }
 
-RUNS = (RunKey(1, 40), RunKey(5, 40, 2))
+RUNS = (RunKey(40), RunKey(40, 3))
 
 
 def synthetic_config(root, **overrides) -> Config:
@@ -75,7 +75,7 @@ def synthetic_config(root, **overrides) -> Config:
     start = pd.bdate_range("2019-01-01", periods=330)[210]
     settings = {
         "data_in": root / "in", "data_out": root / "out", "price_start": "2019-01-01",
-        "backtest_start": str(start.date()), "horizon_days": 1, "train_window_days": 40, "retrain_every": 1,
+        "backtest_start": str(start.date()), "train_window_days": 40, "retrain_every": 1,
         "peer_count": 3,
         "peer_lookback_days": 21, "n_jobs": 1, "lgbm_params": SMALL_LGBM,
     }
