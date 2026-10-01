@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **Nunca rodar `git commit` nem `git push`** (bloqueado em `.claude/settings.json`); os commits são do usuário. Este plano não tem passos de commit.
+- **Nunca rodar `git commit` nem `git push`** (bloqueado em `.claude/settings.json`); os commits são do usuário. Este plano não tem passos de commit. *(Regra revogada em 2026-10-01: commits são liberados dentro do repositório; `git push` continua bloqueado — ver `.claude/CLAUDE.md`.)*
 - Comandos sempre pelo venv do projeto: `venv/bin/python -m pytest ...`, `venv/bin/python main.py ...`.
 - Nenhum código de `data/reference/` é importado ou copiado; ele será apagado.
 - Preços: `yfinance.download(..., auto_adjust=False, actions=True)`; o `Adj Close` é descartado dentro de `download_prices` e nunca é usado.

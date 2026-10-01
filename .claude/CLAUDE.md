@@ -12,7 +12,11 @@ Round 4 (2026-10-01, spec: `docs/superpowers/specs/2026-10-01-v4-next-day-direct
 
 ## Working conventions
 
-- **Never run `git commit` or `git push`.** This is blocked at the permission level (see `.claude/settings.json`, `permissions.deny`). Commits and pushes are entirely the user's responsibility — prepare and stage changes if asked, but leave committing to them.
+- **Agent boundaries (since 2026-10-01).** Agents (the main session and every subagent) may only change files inside this repository.
+  - Commits are allowed: small and meaningful, one per finished task, never with failing tests; end messages with the Co-Authored-By line Claude Code supplies.
+  - `git push` is blocked; pushing (and anything that publishes outside this machine) is the owner's job.
+  - Enforced in `.claude/settings.json`: `permissions.deny` (push, remote/config changes, history rewrites like `reset --hard`/`clean`/`rebase`, `sudo`, `ssh`/`scp`/`rsync`, `crontab`, `systemctl`, `docker`, reading `~/.ssh`/`~/.aws`/`~/.gnupg`/`~/.config/gh`); the Bash sandbox (writes only inside the repo and Claude's temp dir; network without prompts only to `*.yahoo.com`, `raw.githubusercontent.com`, PyPI); and the `PreToolUse` hook `.claude/hooks/restrict_to_repo.py`, which denies Edit/Write/NotebookEdit outside the repo (except Claude's scratchpad and this project's memory). Bypass-permissions mode is disabled.
+  - Never weaken these rules, change global/user configuration (`~/.claude`, `~/.gitconfig`, shell rc files), install system packages, or touch other repositories; if a task needs that, stop and ask the owner.
 - Use the project venv: `venv/bin/python -m pytest`, `venv/bin/python main.py download|features|run --window X --retrain K`, `venv/bin/streamlit run app/dashboard.py`.
 - All parameters live in `config/config.py` (`Config`, `TICKER_ALIASES`, `LGBM_PARAMS`). Aliases only for well-known pure renames; when in doubt, no alias.
 - Lookahead invariants (keep `tests/test_project.py`, `tests/test_features.py`, `tests/test_walk_forward.py` and `tests/test_backtest_validation.py` green): decision after the close of t with data dated ≤ t; buy at the open of t+1, sell at the open of t+2; label = fwd_ret > 0 with fwd_ret = (Open[t+2] + Div[t+2]) / Open[t+1] − 1; training rows t−X−1 … t−2, refit every k sessions; never use Yahoo's `Adj Close`; the universe at t is the constituents snapshot in force at t.

@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **Nunca rodar `git commit` nem `git push`.** Os commits ficam com o dono.
+- **Nunca rodar `git commit` nem `git push`.** Os commits ficam com o dono. *(Regra revogada em 2026-10-01: commits são liberados dentro do repositório; `git push` continua bloqueado — ver `.claude/CLAUDE.md`.)*
 - Comandos via venv: `venv/bin/python -m pytest ...`, `venv/bin/python main.py ...`.
 - **Convenção de tempo:**
   - a decisão é tomada após o fechamento de *t*, só com dados ≤ *t*;

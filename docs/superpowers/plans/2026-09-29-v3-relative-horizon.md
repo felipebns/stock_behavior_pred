@@ -17,7 +17,7 @@
 
 ## Global Constraints
 
-- **Nunca rodar `git commit` nem `git push`** (bloqueado); o usuário faz os commits. Este plano não tem passos de commit.
+- **Nunca rodar `git commit` nem `git push`** (bloqueado); o usuário faz os commits. Este plano não tem passos de commit. *(Regra revogada em 2026-10-01: commits são liberados dentro do repositório; `git push` continua bloqueado — ver `.claude/CLAUDE.md`.)*
 - Comandos pelo venv: `venv/bin/python -m pytest ...`, `venv/bin/python main.py ...`.
 - **Convenção de tempo:**
   - a decisão acontece após o fechamento de *t*, só com dados ≤ *t*;
