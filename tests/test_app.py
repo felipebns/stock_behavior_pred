@@ -112,3 +112,15 @@ def test_runs_tab_compares_every_run(synthetic_project, monkeypatch):
     at = open_app(synthetic_project, monkeypatch)
     table = next(frame.value for frame in at.dataframe if "Giro médio por troca" in frame.value.columns)
     assert list(table.index) == [key.label for key in RUNS]
+
+
+def test_run_without_any_known_outcome_still_renders(tmp_path, monkeypatch):
+    raw = make_market()
+    dates = sorted(raw["prices"]["date"].unique())
+    project = Project(synthetic_config(tmp_path, backtest_start=str(dates[-15].date())))
+    project.build_features(Universe(raw["snapshots"]), PriceData(clean_prices(raw["prices"])))
+    key = RunKey(21, 40)
+    project.run(key)
+    at = open_app(project, monkeypatch, key)
+    assert not at.exception
+    assert any("Ainda não há decisão com resultado conhecido" in info.value for info in at.info)

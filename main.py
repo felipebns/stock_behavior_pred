@@ -59,19 +59,5 @@ if __name__ == "__main__":
     main()
 
 """
-Pergunta: deveria ser 1 por ação ou 1 por dia ? olhar todas as ações não gera ruido desnecessário na hora de prever para 1 única ação ? como que isso funciona ? 
 último: tunning de parametros
-Modelo atual não tem poder preditivo, IC muito baixo
-Testar vários modelos, deixa o streamlit escolher qual
-Pq tirou PARA e BBT ? 
-Preciso explicar paralelização depois. Ta bem demorado, como posso otimizar mais ? 
-Como que correlação entre ações é util ?  
-Custos estão sendo calculados certos ? gap esta muito grande e entre liquido e bruto (ex: janela = 5 limiar=0.67, gap é grande de mais, não faz sentido)
-usar material de algotrading para validar!!
-Deveria deixar variável horizonte de previsão ? 1 dia, 1 semana, etc. Como esta agora ? 
-Escrever mais testes para não perder funcionamento
-Interpretar os dados para extrair sinal, recortes, carteira por dia, etc... Quero conseguir ver o que foi previsto vs o que aconteceu, preciso entender o que é o gap de erro
-buscar outra fonte de dado para ação, sem ser yahoo (binance ? olhar algo trading )
-usar framework de backtesting já pronto ? (material)
-material em algo trading
 """

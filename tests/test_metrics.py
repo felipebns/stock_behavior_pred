@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from engine.metrics import decile_spread, deciles, drawdown, model_metrics, monthly_auc, performance_metrics
+from engine.metrics import daily_ic, decile_spread, deciles, drawdown, model_metrics, monthly_auc, performance_metrics
 
 
 def series(values) -> pd.Series:
@@ -106,3 +106,9 @@ def test_rows_with_unknown_outcome_are_left_out_of_the_deciles():
     predictions = ranked_predictions()
     predictions.loc[predictions["ticker"] == "T9", ["fwd_ret", "label"]] = np.nan
     assert decile_spread(predictions).tolist() == pytest.approx([0.08, -0.08])
+
+
+def test_daily_ic_and_monthly_auc_without_known_outcomes_are_empty_series():
+    empty = pd.DataFrame({"date": pd.to_datetime([]), "prob": [], "fwd_ret": [], "label": []})
+    for result in (daily_ic(empty), monthly_auc(empty)):
+        assert isinstance(result, pd.Series) and result.empty

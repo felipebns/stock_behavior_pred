@@ -26,8 +26,10 @@ def performance_metrics(returns: pd.Series, rf: pd.Series, invested: pd.Series |
 
 
 def daily_ic(predictions: pd.DataFrame) -> pd.Series:
-    """Spearman correlation between predicted probability and realized return, per decision date."""
+    """Spearman correlation between predicted probability and realized return, per decision date (empty if none is known)."""
     realized = predictions.dropna(subset=["fwd_ret"])
+    if realized.empty:
+        return pd.Series(dtype=float)
     return realized.groupby("date")[["prob", "fwd_ret"]].apply(lambda day: day["prob"].corr(day["fwd_ret"], method="spearman"))
 
 
@@ -48,6 +50,8 @@ def monthly_auc(predictions: pd.DataFrame) -> pd.Series:
     def auc(period: pd.DataFrame) -> float:
         return float(roc_auc_score(period["label"], period["prob"])) if period["label"].nunique() == 2 else float("nan")
 
+    if known.empty:
+        return pd.Series(dtype=float)
     return known.groupby(pd.Grouper(key="date", freq="ME"))[["label", "prob"]].apply(auc)
 
 
