@@ -29,7 +29,9 @@ def _sklearn(estimator, scale: bool = False):
     rows' mean and spread) — fit inside the pipeline, so only on the training window."""
     def make(params: dict, n_rows: int):
         steps = [SimpleImputer(strategy="median", keep_empty_features=True)]
-        return make_pipeline(*steps, *([StandardScaler()] if scale else []), estimator(**params))
+        if scale:
+            steps.append(StandardScaler())
+        return make_pipeline(*steps, estimator(**params))
     return make
 
 
@@ -51,4 +53,5 @@ def importance(model, n_features: int) -> np.ndarray:
         values = np.abs(np.asarray(final.coef_, dtype=float)).ravel()
     else:
         values = np.zeros(n_features)
-    return values / values.sum() if values.sum() > 0 else values
+    total = values.sum()
+    return values / total if total > 0 else values

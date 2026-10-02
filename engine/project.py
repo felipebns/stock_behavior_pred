@@ -14,9 +14,9 @@ import pandas as pd
 from config.config import REASSIGNED_TICKERS, TICKER_ALIASES, Config
 from engine.dataset import build_dataset
 from engine.features import FEATURES, FeatureBuilder
+from engine.models import MODELS
 from engine.prices import PriceData, daily_total_return, forward_intraday_return
 from engine.universe import Universe
-from engine.models import MODELS
 from engine.walk_forward import SCOPES, WalkForward
 
 PACKAGES = ("pandas", "numpy", "lightgbm", "scikit-learn", "joblib", "yfinance", "streamlit")
@@ -126,8 +126,9 @@ class Project:
         c = self.config
         features = self.features()
         started = time.perf_counter()
-        walk_forward = WalkForward(key.window, MODELS[key.model][1], c.model_params[key.model], key.retrain_every,
-                                   key.scope, c.per_stock_min_rows, c.n_jobs)
+        walk_forward = WalkForward(key.window, MODELS[key.model][1], c.model_params[key.model],
+                                   retrain_every=key.retrain_every, scope=key.scope,
+                                   min_stock_rows=c.per_stock_min_rows, n_jobs=c.n_jobs)
         result = walk_forward.run(features.dataset, FEATURES, features.calendar, start=c.backtest_start, progress=progress)
         results = RunResults(key, result.predictions, result.importance, info={
             "key": dataclasses.asdict(key),
@@ -184,6 +185,7 @@ class Project:
         return json.loads(json.dumps({name: getattr(self.config, name) for name in names}))
 
     def _model_params(self, model: str) -> dict:
+        """That model's config parameters as they read back from JSON, like _settings."""
         return json.loads(json.dumps(self.config.model_params[model]))
 
     def _feature_settings(self) -> dict:
@@ -214,14 +216,14 @@ class Project:
         tickers = sorted(set(wanted) & (prices.tickers - {c.benchmark_ticker, c.risk_free_ticker} - REASSIGNED_TICKERS))
         panel = prices.panel(calendar, tickers)
         membership = universe.membership(calendar, tickers)
+        bench_close = prices.series(c.benchmark_ticker, "close", calendar)
         ticker_features, date_features = FeatureBuilder(c.peer_count, c.peer_lookback_days).build(
-            panel, prices.series(c.benchmark_ticker, "close", calendar), membership)
+            panel, bench_close, membership)
         dataset = build_dataset(ticker_features, date_features, membership, panel.close,
                                 forward_intraday_return(panel.open, panel.close), c.complete_history_days)
         market = pd.DataFrame({
             "holding_date": pd.Series(calendar, index=calendar).shift(-1),
-            "bench_fwd_ret": forward_intraday_return(prices.series(c.benchmark_ticker, "open", calendar),
-                                                    prices.series(c.benchmark_ticker, "close", calendar)),
+            "bench_fwd_ret": forward_intraday_return(prices.series(c.benchmark_ticker, "open", calendar), bench_close),
             "rf_daily": prices.series(c.risk_free_ticker, "close", calendar)
                               .ffill(limit=c.risk_free_max_staleness_days) / 100.0 / 252.0,
         }, index=calendar).rename_axis("decision_date")

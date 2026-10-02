@@ -394,9 +394,10 @@ with tab_walk:
             chosen = selection.daily
             st.dataframe(metrics_table(compare(chosen)))
             line_chart(curves(chosen, growth), "Capital (1,0 no início do walk-forward)")
+            picked = selection.choices["candidate"]
             choices = selection.choices.assign(
-                Run=lambda frame: frame["candidate"].map(lambda name: names[name][0]),
-                Limiar=lambda frame: frame["candidate"].map(lambda name: names[name][1]),
+                Run=picked.map(lambda name: names[name][0]),
+                Limiar=picked.map(lambda name: names[name][1]),
             ).rename(columns={"start": "Início", "lookback_sharpe": "Sharpe no período anterior", "days": "Dias"})
             st.markdown("**Escolhas**")
             st.dataframe(choices[["Início", "Run", "Limiar", "Sharpe no período anterior", "Dias"]]

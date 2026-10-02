@@ -49,8 +49,10 @@ class WalkForward:
 
     def run(self, dataset: pd.DataFrame, features: list[str], calendar: pd.DatetimeIndex, start=None,
             progress=None) -> WalkForwardResult:
-        row_pos = calendar.get_indexer(dataset.index.get_level_values("date"))
-        stocks = pd.factorize(dataset.index.get_level_values("ticker"))[0]
+        dates = dataset.index.get_level_values("date")
+        tickers = dataset.index.get_level_values("ticker")
+        row_pos = calendar.get_indexer(dates)
+        stocks = pd.factorize(tickers)[0]
         X = dataset[features].to_numpy(dtype=np.float32)
         y = dataset["label"].to_numpy(dtype=float)
         decisions = self.decisions(row_pos, calendar, start)
@@ -60,22 +62,22 @@ class WalkForward:
                                     self.params, self.scope, self.min_stock_rows) for block in blocks)
         prob = np.full(len(dataset), np.nan)
         gains = []
-        for done, (rows, probs, block_gains) in enumerate(Parallel(n_jobs=self.n_jobs, return_as="generator")(jobs), start=1):
+        results = Parallel(n_jobs=self.n_jobs, return_as="generator")(jobs)
+        for done, (rows, probs, block_gains) in enumerate(results, start=1):
             prob[rows] = probs
             gains.append(block_gains)
             if progress is not None:
                 progress(done / len(blocks))
         decided = np.flatnonzero(np.isin(row_pos, decisions))
         predictions = pd.DataFrame({
-            "date": dataset.index.get_level_values("date")[decided],
-            "ticker": dataset.index.get_level_values("ticker")[decided],
+            "date": dates[decided],
+            "ticker": tickers[decided],
             "prob": prob[decided],
             "fwd_ret": dataset["fwd_ret"].to_numpy()[decided],
             "label": y[decided],
         })
-        importance_ = pd.DataFrame(np.vstack(gains), index=pd.DatetimeIndex(calendar[[group[0] for group in fits]], name="date"),
-                                   columns=features)
-        return WalkForwardResult(predictions, importance_)
+        fit_dates = pd.DatetimeIndex(calendar[[group[0] for group in fits]], name="date")
+        return WalkForwardResult(predictions, pd.DataFrame(np.vstack(gains), index=fit_dates, columns=features))
 
 
 def _fit(X, y, make_model, params, min_rows=1):
@@ -94,22 +96,24 @@ def _fit_block(X, y, row_pos, stocks, fits, window, make_model, params, scope, m
         train = np.arange(np.searchsorted(row_pos, group[0] - window, side="left"),
                           np.searchsorted(row_pos, group[0] - 1, side="right"))
         train = train[~np.isnan(y[train])]
-        target = np.arange(np.searchsorted(row_pos, group[0], side="left"), np.searchsorted(row_pos, group[-1], side="right"))
+        target = np.arange(np.searchsorted(row_pos, group[0], side="left"),
+                           np.searchsorted(row_pos, group[-1], side="right"))
         if scope == "pooled":
             predict, gain = _fit(X[train], y[train], make_model, params)
             rows_out.append(target)
             probs_out.append(predict(X[target]))
             gains.append(gain)
-            continue
-        order = train[np.argsort(stocks[train], kind="stable")]
-        sorted_stocks = stocks[order]
-        stock_gains = []
-        for stock in np.unique(stocks[target]):
-            mine = order[np.searchsorted(sorted_stocks, stock, side="left"):np.searchsorted(sorted_stocks, stock, side="right")]
-            predict, gain = _fit(X[mine], y[mine], make_model, params, min_stock_rows)
-            rows = target[stocks[target] == stock]
-            rows_out.append(rows)
-            probs_out.append(predict(X[rows]))
-            stock_gains.append(gain)
-        gains.append(np.mean(stock_gains, axis=0))
+        else:
+            by_stock = train[np.argsort(stocks[train], kind="stable")]
+            sorted_stocks = stocks[by_stock]
+            stock_gains = []
+            for stock in np.unique(stocks[target]):
+                mine = by_stock[np.searchsorted(sorted_stocks, stock, side="left"):
+                                np.searchsorted(sorted_stocks, stock, side="right")]
+                predict, gain = _fit(X[mine], y[mine], make_model, params, min_stock_rows)
+                rows = target[stocks[target] == stock]
+                rows_out.append(rows)
+                probs_out.append(predict(X[rows]))
+                stock_gains.append(gain)
+            gains.append(np.mean(stock_gains, axis=0))
     return np.concatenate(rows_out), np.concatenate(probs_out), np.vstack(gains)
