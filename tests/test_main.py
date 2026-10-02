@@ -52,3 +52,11 @@ def test_sweep_runs_missing_combinations_and_skips_existing_ones(tmp_path, capsy
     out = capsys.readouterr().out
     assert len(project.runs()) == 2
     assert out.count("já existe") == 1 and "máximo" in out
+
+
+def test_sweep_without_windows_uses_each_scopes_defaults(tmp_path, capsys):
+    raw = make_market()
+    project = Project(synthetic_config(tmp_path, per_stock_window_days=30, per_stock_retrain_every=10))
+    project.build_features(Universe(raw["snapshots"]), PriceData(clean_prices(raw["prices"])))
+    main.sweep(project, ["naive_bayes"], ["pooled", "per_stock"])
+    assert project.runs() == [RunKey("naive_bayes", "per_stock", 30, 10), RunKey("naive_bayes", "pooled", 40, 1)]

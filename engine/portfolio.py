@@ -56,7 +56,7 @@ class Portfolio:
         daily = pd.DataFrame({
             "decision_date": dates.to_numpy(),
             "gross": gross.to_numpy(),
-            "net": ((1.0 + gross) * (1.0 - cost) - 1.0).to_numpy(),
+            "net": ((1.0 + gross) * (1.0 - cost) - 1.0).where(invested, gross).to_numpy(),
             "bench": window["bench_fwd_ret"].to_numpy(),
             "rf": window["rf_daily"].to_numpy(),
             "n_positions": n_positions.to_numpy(),

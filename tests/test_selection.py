@@ -47,3 +47,17 @@ def test_too_few_days_gives_an_empty_result():
     result = walk_forward_selection({"a": frame([0.01] * 12)}, lookback=12, step=4)
     assert result.daily.empty and result.choices.empty
     assert list(result.choices.columns) == ["start", "candidate", "lookback_sharpe", "days"]
+
+
+def test_an_all_cash_portfolio_has_zero_excess_and_counts_as_zero_sharpe():
+    from engine.metrics import performance_metrics
+    from engine.portfolio import Portfolio
+    dates = pd.bdate_range("2023-01-02", periods=13, name="decision_date")
+    market = pd.DataFrame({"holding_date": list(dates[1:]) + [pd.NaT], "bench_fwd_ret": [0.001] * 12 + [np.nan],
+                           "rf_daily": 0.00017 + 0.00001 * np.arange(13)}, index=dates)
+    predictions = pd.DataFrame({"date": dates[:12], "ticker": "A", "prob": 0.3, "fwd_ret": 0.01, "label": 1.0})
+    cash = Portfolio(0.55, cost_bps=5.0).backtest(predictions, market).daily
+    assert np.isnan(performance_metrics(cash["net"], cash["rf"])["sharpe"])
+    losing = cash.assign(net=-0.01, invested=True)
+    picks = walk_forward_selection({"losing": losing, "cash": cash}, lookback=4, step=4).choices
+    assert picks["candidate"].tolist() == ["cash"] * 2 and (picks["lookback_sharpe"] == 0).all()

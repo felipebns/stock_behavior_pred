@@ -121,3 +121,8 @@ def test_no_realized_day_gives_an_empty_backtest(predictions, market):
     result = Portfolio(0.55).backtest(predictions, market.assign(bench_fwd_ret=np.nan))
     assert result.daily.empty and result.positions.empty
     assert list(result.positions.columns) == ["decision_date", "holding_date", "ticker", "prob", "weight", "fwd_ret", "contribution"]
+
+
+def test_cash_days_earn_exactly_the_risk_free_rate(predictions, market):
+    daily = Portfolio(0.99, cost_bps=5.0).backtest(predictions, market).daily
+    assert (daily["net"] == daily["rf"]).all() and (daily["gross"] == daily["rf"]).all()

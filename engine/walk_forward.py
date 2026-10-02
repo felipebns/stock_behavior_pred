@@ -31,6 +31,9 @@ class WalkForward:
         self.scope = scope
         self.min_stock_rows = min_stock_rows
         self.n_jobs = n_jobs
+        if scope == "per_stock" and train_window < min_stock_rows:
+            raise ValueError(f"um modelo por ação precisa de uma janela de pelo menos {min_stock_rows} pregões (cada ação "
+                             f"treina só com as próprias linhas); recebido: {train_window}")
 
     def decisions(self, row_pos: np.ndarray, calendar: pd.DatetimeIndex, start=None) -> np.ndarray:
         first = row_pos[0] + self.train_window

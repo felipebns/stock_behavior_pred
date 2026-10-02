@@ -125,10 +125,16 @@ def test_per_stock_fits_one_model_per_stock_on_its_own_rows():
 
 
 def test_per_stock_without_enough_rows_predicts_its_up_frequency():
-    predictions = run_spy(spy_dataset(), window=3, scope="per_stock", min_stock_rows=4).predictions
-    assert logged("fit") == []
-    first = predictions[predictions["date"] == DATES[5]].set_index("ticker")["prob"]
-    assert first.tolist() == pytest.approx([1 / 3, 2 / 3])
+    dataset = spy_dataset().drop((DATES[3], "B"))
+    predictions = run_spy(dataset, window=4, scope="per_stock", min_stock_rows=4).predictions
+    assert logged("fit")[0][1] == [0]
+    first = predictions[predictions["date"] == DATES[6]].set_index("ticker")["prob"]
+    assert first["A"] == 0.7 and first["B"] == pytest.approx(2 / 3)
+
+
+def test_per_stock_needs_a_window_of_at_least_the_minimum_rows():
+    with pytest.raises(ValueError, match="pelo menos 63"):
+        WalkForward(21, lambda params, n_rows: Spy(n_rows), {}, scope="per_stock", min_stock_rows=63)
 
 
 @pytest.mark.parametrize("value", [0.0, 1.0])

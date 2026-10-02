@@ -31,10 +31,21 @@ def report(project: Project, key: RunKey) -> None:
     print("Modelo:", {name: round(value, 4) for name, value in metrics.model_metrics(realized).items()})
 
 
-def sweep(project: Project, models: list[str], scopes: list[str], windows: list[int], retrains: list[int]) -> None:
-    """Runs every combination that does not exist yet, one after the other, printing one line per combination."""
+def defaults(config, scope: str) -> tuple[int, int]:
+    """Training window and refit interval used when none is given: a per-stock model needs a much longer window."""
+    if scope == "pooled":
+        return config.train_window_days, config.retrain_every
+    return config.per_stock_window_days, config.per_stock_retrain_every
+
+
+def sweep(project: Project, models: list[str], scopes: list[str], windows: list[int] | None = None,
+          retrains: list[int] | None = None) -> None:
+    """Runs every combination that does not exist yet, one after the other, printing one line per combination.
+    Without windows or retrains, each scope uses its own defaults."""
     existing = set(project.runs())
-    for key in [RunKey(m, s, w, k) for m in models for s in scopes for w in windows for k in retrains]:
+    keys = [RunKey(m, s, w, k) for m in models for s in scopes
+            for w in (windows or [defaults(project.config, s)[0]]) for k in (retrains or [defaults(project.config, s)[1]])]
+    for key in keys:
         if key in existing:
             print(f"{key.label}: já existe")
             continue
@@ -71,8 +82,10 @@ def main(argv: list[str] | None = None) -> None:
     sweep_command = commands.add_parser("sweep", help="roda todas as combinações que ainda não existem")
     sweep_command.add_argument("--models", nargs="+", choices=list(MODELS), default=[CONFIG.model])
     sweep_command.add_argument("--scopes", nargs="+", choices=list(SCOPES), default=[CONFIG.scope])
-    sweep_command.add_argument("--windows", nargs="+", type=positive, default=[CONFIG.train_window_days])
-    sweep_command.add_argument("--retrain", nargs="+", type=positive, default=[CONFIG.retrain_every])
+    sweep_command.add_argument("--windows", nargs="+", type=positive, default=None,
+                               help="padrão: 21 em pooled, 252 em per_stock")
+    sweep_command.add_argument("--retrain", nargs="+", type=positive, default=None,
+                               help="padrão: 1 em pooled, 21 em per_stock")
     args = parser.parse_args(argv)
     project = Project(CONFIG)
     try:
@@ -86,10 +99,8 @@ def main(argv: list[str] | None = None) -> None:
         elif args.command == "sweep":
             sweep(project, args.models, args.scopes, args.windows, args.retrain)
         else:
-            pooled = args.scope == "pooled"
-            key = RunKey(args.model, args.scope,
-                         args.window or (CONFIG.train_window_days if pooled else CONFIG.per_stock_window_days),
-                         args.retrain or (CONFIG.retrain_every if pooled else CONFIG.per_stock_retrain_every))
+            window, retrain = defaults(CONFIG, args.scope)
+            key = RunKey(args.model, args.scope, args.window or window, args.retrain or retrain)
             run = project.run(key, progress=lambda done: print(f"\rtreinando {done:.0%}", end="", flush=True))
             print(f"\n{len(run.predictions):,} previsões em {run.info['runtime_minutes']} min")
             report(project, key)
