@@ -76,7 +76,7 @@ def test_positions_have_holding_dates_and_contributions(predictions, market):
     assert day0["contribution"].sum() == pytest.approx(0.6 / 1.3 * 0.01 + 0.7 / 1.3 * -0.02)
 
 
-def test_costs_follow_turnover_against_drifted_weights():
+def test_costs_are_a_full_round_trip_on_every_invested_day():
     dates = pd.bdate_range("2022-01-03", periods=6, name="decision_date")
     market = pd.DataFrame({
         "holding_date": list(dates[1:]) + [pd.NaT],
@@ -91,10 +91,11 @@ def test_costs_follow_turnover_against_drifted_weights():
         (dates[4], "C", 0.7, 0.00),
     ])
     daily = Portfolio(0.55, cost_bps=10.0).backtest(predictions, market).daily
-    assert daily["turnover"].tolist() == pytest.approx([1.0, 0.1, 2.0, 1.0, 1.0])
-    assert daily["cost"].tolist() == pytest.approx([0.001, 0.0001, 0.002, 0.001, 0.001])
-    assert daily["net"].iloc[0] == pytest.approx((1 + daily["gross"].iloc[0]) * (1 - 0.001) - 1)
-    assert daily["net"].iloc[3] == pytest.approx((1 + 0.0001) * (1 - 0.001) - 1)
+    round_trip = 1 - (1 - 0.001) ** 2
+    assert daily["turnover"].tolist() == [2.0, 2.0, 2.0, 0.0, 2.0]
+    assert daily["cost"].tolist() == pytest.approx([round_trip] * 3 + [0.0, round_trip])
+    assert daily["net"].iloc[0] == pytest.approx((1 + daily["gross"].iloc[0]) * (1 - 0.001) ** 2 - 1)
+    assert daily["net"].iloc[3] == pytest.approx(0.0001)
 
 
 def test_zero_cost_means_net_equals_gross(predictions, market):

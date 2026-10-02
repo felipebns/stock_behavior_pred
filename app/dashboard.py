@@ -1,7 +1,8 @@
 """Resultados do backtest. Rode com: streamlit run app/dashboard.py
 
-Escolha na barra lateral a janela de treino X e o retreino k: se esse run ainda não existe, o botão treina (em paralelo)
-e salva; os runs já feitos abrem na hora e são comparados na aba "Runs".
+Escolha na barra lateral o modelo, o escopo (um modelo para todas as ações ou um por ação), a janela de treino X e o
+retreino k: se esse run ainda não existe, o botão treina (em paralelo) e salva; os runs já feitos abrem na hora, são
+comparados na aba "Runs" e servem de candidatos na aba "Walk-forward".
 """
 import dataclasses
 import sys
@@ -11,18 +12,21 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import altair as alt
+import numpy as np
 import pandas as pd
 import streamlit as st
 
 from config.config import CONFIG
 from engine import metrics
+from engine.models import MODELS
 from engine.portfolio import Portfolio
 from engine.project import Project, RunKey
-from engine.walk_forward import MODELS
+from engine.selection import walk_forward_selection
+from engine.walk_forward import SCOPES
 
 PROJECT = Project(dataclasses.replace(CONFIG, data_in=ROOT / CONFIG.data_in, data_out=ROOT / CONFIG.data_out))
 OUT = str(PROJECT.config.data_out)
-BENCH = "S&P 500 TR"
+BENCH = "S&P 500 TR (intraday)"
 LEVELS = {"gross": "Carteira (bruta)", "net": "Carteira (líquida)"}
 CHART_WIDTH = 980
 METRIC_FORMATS = {
@@ -76,6 +80,19 @@ def evaluate(data_out: str, key: RunKey, run_stamp: int) -> dict:
 def evaluate_since(data_out: str, key: RunKey, run_stamp: int, start: pd.Timestamp) -> dict:
     evaluated = known(data_out, key, run_stamp)
     return metrics.model_metrics(evaluated[evaluated["date"] >= start])
+
+
+@st.cache_data(show_spinner="Escolhendo runs e limiares…", max_entries=16)
+def select(data_out: str, keys: tuple, stamps: tuple, features_stamp: int, thresholds: tuple, cost_bps: float,
+           lookback: int, step: int):
+    """Every (run, threshold) pair is a candidate; returns the walk-forward selection and each candidate's (run, threshold)."""
+    candidates, names = {}, {}
+    for key, stamp in zip(keys, stamps):
+        for threshold in thresholds:
+            name = f"{key.name}@{threshold:.3f}"
+            candidates[name] = backtest(data_out, key, stamp, features_stamp, threshold, cost_bps).daily
+            names[name] = (key.label, threshold)
+    return walk_forward_selection(candidates, lookback, step), names
 
 
 def fmt(value: float, pattern: str) -> str:
@@ -139,12 +156,17 @@ except FileNotFoundError:
 
 with st.sidebar:
     st.header("Run")
-    model = st.selectbox("Modelo", list(MODELS)) if len(MODELS) > 1 else next(iter(MODELS))
-    window = int(st.number_input("Janela de treino X: pregões de exemplos (5 = 1 semana, 21 = 1 mês, 63 = 3 meses)",
-                                 min_value=1, max_value=1000, value=CONFIG.train_window_days, step=1))
-    retrain = int(st.number_input("Retreinar a cada k pregões (1 = todo dia)",
-                                  min_value=1, max_value=100, value=CONFIG.retrain_every, step=1))
-    key = RunKey(window, retrain, model)
+    model = st.selectbox("Modelo", list(MODELS), index=list(MODELS).index(CONFIG.model),
+                         format_func=lambda name: MODELS[name][0], key="model")
+    scope = st.radio("Escopo", list(SCOPES), index=list(SCOPES).index(CONFIG.scope), format_func=SCOPES.get, key="scope")
+    pooled = scope == "pooled"
+    window = int(st.number_input("Janela de treino X: pregões de exemplos", min_value=1, max_value=1000, step=1,
+                                 value=CONFIG.train_window_days if pooled else CONFIG.per_stock_window_days,
+                                 key=f"window_{scope}"))
+    retrain = int(st.number_input("Retreinar a cada k pregões (1 = todo dia)", min_value=1, max_value=252, step=1,
+                                  value=CONFIG.retrain_every if pooled else CONFIG.per_stock_retrain_every,
+                                  key=f"retrain_{scope}"))
+    key = RunKey(model, scope, window, retrain)
     runs = PROJECT.runs()
     if key not in runs and st.button(f"Rodar {key.label}", type="primary"):
         bar = st.progress(0.0, text="Treinando…")
@@ -159,9 +181,10 @@ with st.sidebar:
     threshold = st.slider("Limiar: probabilidade mínima de subir", 0.40, 0.80, float(CONFIG.threshold), 0.005, format="%.3f")
     cost_bps = st.number_input("Custo de transação (bps por lado, em cada compra ou venda)", 0.0, 50.0, float(CONFIG.cost_bps), 0.5)
     st.caption(
-        "Todo dia, compra na abertura seguinte as ações cuja probabilidade prevista de subir passa do limiar, com peso "
-        "proporcional à probabilidade, e vende na abertura do dia seguinte; se nenhuma passar, fica em caixa rendendo a "
-        "T-bill (^IRX). Escolher limiar, X ou k olhando este resultado é otimizar dentro do próprio backtest (data snooping)."
+        "Todo dia, compra na abertura as ações cuja probabilidade prevista de subir durante o dia passa do limiar, com "
+        "peso proporcional à probabilidade, e vende no fechamento do mesmo dia; se nenhuma passar, fica em caixa rendendo "
+        "a T-bill (^IRX). Escolher limiar, modelo, X ou k olhando este resultado é otimizar dentro do próprio backtest "
+        "(data snooping): a aba Walk-forward faz essa escolha só com o passado."
     )
 
 if key not in runs:
@@ -181,23 +204,25 @@ window_coverage = features.coverage.loc[daily["decision_date"].min():daily["deci
 st.title("Backtest ML — S&P 500")
 st.caption(f"{key.label} · {len(daily)} dias de carteira · {daily.index.min().date()} → {daily.index.max().date()} · "
            f"gerado em {run.info.get('generated_at', '?')}")
-tab_overview, tab_signal, tab_day, tab_periods, tab_runs, tab_model = st.tabs(
-    ["Visão geral", "Previsto vs realizado", "Carteira por dia", "Recortes de período", "Runs", "Modelo"])
+tab_overview, tab_signal, tab_day, tab_periods, tab_runs, tab_walk, tab_model = st.tabs(
+    ["Visão geral", "Previsto vs realizado", "Carteira por dia", "Recortes de período", "Runs", "Walk-forward", "Modelo"])
 
 with tab_overview:
     for col, (label, text) in zip(st.columns(3), labeled(evaluation["summary"], MODEL_FORMATS).items()):
         col.metric(label, text)
     st.caption(
-        f"{model} retreinado a cada {retrain} pregão(ões) com os exemplos dos últimos {window} pregões; após cada "
-        f"fechamento, estima a probabilidade de cada ação do índice subir da abertura seguinte até a outra · em média "
+        f"{MODELS[model][0]} ({SCOPES[scope]}) retreinado a cada {retrain} pregão(ões) com os exemplos dos últimos "
+        f"{window} pregões; após cada fechamento, estima a probabilidade de cada ação do índice subir da abertura ao "
+        f"fechamento do dia seguinte · em média "
         f"{window_coverage['n_eligible'].mean():.0f} ações elegíveis por dia, de "
         f"{window_coverage['n_members'].mean():.0f} membros do índice."
     )
-    st.subheader("Carteira vs S&P 500 Total Return")
+    st.subheader("Carteira vs S&P 500 Total Return (abertura → fechamento)")
     st.dataframe(metrics_table(compare(daily)))
     line_chart(curves(daily, growth), "Capital (1,0 no início)")
-    st.caption("Decisão após o fechamento de t, compra na abertura de t+1 e rebalanceamento na abertura seguinte "
-               "(retornos abertura → abertura, com dividendos). Arraste ou use a roda do mouse para aproximar.")
+    st.caption("Decisão após o fechamento de t, compra na abertura de t+1 e venda no fechamento de t+1 (retorno "
+               "abertura → fechamento); o custo incide na compra e na venda de cada dia investido. Arraste ou use a roda "
+               "do mouse para aproximar.")
     st.markdown("**Drawdown**")
     line_chart(curves(daily, metrics.drawdown), "Drawdown", height=220, area=True)
     st.markdown("**Nº de ações na carteira**")
@@ -217,7 +242,7 @@ with tab_signal:
     else:
         bars = alt.Chart(table).mark_bar().encode(
             x=alt.X("decil:O", title="Decil de probabilidade prevista"),
-            y=alt.Y("fwd_ret:Q", title="Retorno médio no dia seguinte", axis=alt.Axis(format="%")),
+            y=alt.Y("fwd_ret:Q", title="Retorno médio da abertura ao fechamento do dia seguinte", axis=alt.Axis(format="%")),
             color=alt.condition(alt.datum.fwd_ret > 0, alt.value("#26a65b"), alt.value("#d64541")),
             tooltip=[alt.Tooltip("decil:O"), alt.Tooltip("fwd_ret:Q", format="+.3%")],
         )
@@ -249,6 +274,7 @@ with tab_day:
     holding_dates = list(daily.index)
     choice = st.selectbox(
         "Dia de carteira",
+        key="day",
         options=range(len(holding_dates)),
         index=len(holding_dates) - 1,
         format_func=lambda i: (f"{holding_dates[i].date()}  ·  carteira {daily['gross'].iloc[i]:+.2%}  ·  "
@@ -264,7 +290,7 @@ with tab_day:
     cols[4].metric("Giro", f"{day['turnover']:.0%}")
     cols[5].metric("Custo", f"{day['cost']:.3%}")
     st.caption(f"Sinal calculado após o fechamento de {decision_date.date()}; compra na abertura de "
-               f"{holding_date.date()} e rebalanceamento na abertura do pregão seguinte.")
+               f"{holding_date.date()} e venda no fechamento do mesmo dia.")
     held = positions[positions["holding_date"] == holding_date]
     if held.empty:
         st.info(f"Nenhuma ação passou do limiar: carteira em caixa rendendo {day['rf']:.4%} no dia.")
@@ -292,7 +318,7 @@ with tab_day:
     else:
         dots = alt.Chart(outcome).mark_circle(size=45, opacity=0.7).encode(
             x=alt.X("prob:Q", title="Probabilidade prevista de subir", scale=alt.Scale(zero=False)),
-            y=alt.Y("fwd_ret:Q", title="Retorno realizado no dia seguinte", axis=alt.Axis(format="%")),
+            y=alt.Y("fwd_ret:Q", title="Retorno da abertura ao fechamento do dia seguinte", axis=alt.Axis(format="%")),
             color=alt.Color("went_up:N", title=None,
                             scale=alt.Scale(domain=list(WENT_UP.values()), range=["#26a65b", "#d64541"])),
             tooltip=["ticker", alt.Tooltip("prob:Q", format=".3f"), alt.Tooltip("fwd_ret:Q", format="+.2%")],
@@ -346,6 +372,38 @@ with tab_runs:
             "Tempo de treino (min)": fmt(load_run(OUT, other, other_stamp).info.get("runtime_minutes", float("nan")), "{:.1f}"),
         }
     st.dataframe(pd.DataFrame(rows).T)
+
+with tab_walk:
+    st.caption("A cada período, escolhe o run e o limiar com o maior Sharpe líquido no período anterior (só com dias já "
+               "realizados) e segue essa escolha até a próxima. Nada é retreinado: os candidatos são runs já feitos, cujas "
+               "previsões já são fora da amostra; o custo é o da barra lateral.")
+    candidates = st.multiselect("Runs candidatos", runs, default=runs, format_func=lambda other: other.label, key="wf_runs")
+    low, high = st.slider("Limiares candidatos", 0.40, 0.80, (0.50, 0.70), 0.025, key="wf_thresholds")
+    thresholds = tuple(float(v) for v in np.round(np.arange(low, high + 1e-9, 0.025), 3))
+    left, right = st.columns(2)
+    lookback = int(left.number_input("Olhar para trás (pregões)", 5, 1000, CONFIG.selection_lookback_days, key="wf_lookback"))
+    step = int(right.number_input("Reescolher a cada (pregões)", 1, 504, CONFIG.selection_step_days, key="wf_step"))
+    if not candidates:
+        st.info("Escolha ao menos um run.")
+    else:
+        selection, names = select(OUT, tuple(candidates), tuple(PROJECT.stamp(other) for other in candidates),
+                                  features_stamp, thresholds, cost_bps, lookback, step)
+        if selection.choices.empty:
+            st.info("O período do backtest é curto demais para esse olhar para trás.")
+        else:
+            chosen = selection.daily
+            st.dataframe(metrics_table(compare(chosen)))
+            line_chart(curves(chosen, growth), "Capital (1,0 no início do walk-forward)")
+            choices = selection.choices.assign(
+                Run=lambda frame: frame["candidate"].map(lambda name: names[name][0]),
+                Limiar=lambda frame: frame["candidate"].map(lambda name: names[name][1]),
+            ).rename(columns={"start": "Início", "lookback_sharpe": "Sharpe no período anterior", "days": "Dias"})
+            st.markdown("**Escolhas**")
+            st.dataframe(choices[["Início", "Run", "Limiar", "Sharpe no período anterior", "Dias"]]
+                         .style.format({"Limiar": "{:.3f}", "Sharpe no período anterior": "{:.2f}"}), hide_index=True)
+            st.markdown("**Quanto tempo cada escolha ficou valendo**")
+            st.dataframe(choices.groupby(["Run", "Limiar"])["Dias"].sum().sort_values(ascending=False).reset_index(),
+                         hide_index=True)
 
 with tab_model:
     st.markdown("**AUC por mês**")

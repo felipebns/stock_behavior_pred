@@ -1,12 +1,14 @@
-"""`python main.py download` baixa constituintes e preços; `features` calcula as features; `run --window X --retrain K` roda o walk-forward."""
+"""`python main.py download` baixa constituintes e preços; `features` calcula as features; `run --model M --scope S --window X --retrain K` roda um walk-forward; `sweep` roda uma grade de combinações."""
 import argparse
 
 import pandas as pd
 
 from config.config import CONFIG
 from engine import metrics
+from engine.models import MODELS
 from engine.portfolio import Portfolio
 from engine.project import Project, RunKey
+from engine.walk_forward import SCOPES
 
 
 def report(project: Project, key: RunKey) -> None:
@@ -29,6 +31,23 @@ def report(project: Project, key: RunKey) -> None:
     print("Modelo:", {name: round(value, 4) for name, value in metrics.model_metrics(realized).items()})
 
 
+def sweep(project: Project, models: list[str], scopes: list[str], windows: list[int], retrains: list[int]) -> None:
+    """Runs every combination that does not exist yet, one after the other, printing one line per combination."""
+    existing = set(project.runs())
+    for key in [RunKey(m, s, w, k) for m in models for s in scopes for w in windows for k in retrains]:
+        if key in existing:
+            print(f"{key.label}: já existe")
+            continue
+        try:
+            run = project.run(key)
+        except ValueError as error:
+            print(f"{key.label}: erro: {error}")
+            continue
+        summary = metrics.model_metrics(run.predictions)
+        print(f"{key.label}: {run.info['runtime_minutes']} min · AUC {summary['auc']:.4f} · IC {summary['ic']:+.4f}",
+              flush=True)
+
+
 def positive(text: str) -> int:
     value = int(text)
     if value < 1:
@@ -41,10 +60,19 @@ def main(argv: list[str] | None = None) -> None:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("download", help="baixa os constituintes (GitHub) e os preços (yfinance) mais recentes")
     commands.add_parser("features", help="calcula as features uma vez (servem para todas as janelas)")
-    run_command = commands.add_parser("run", help="walk-forward para uma janela de treino e relatório")
-    run_command.add_argument("--window", type=positive, default=CONFIG.train_window_days,
-                             help="pregões de exemplos de treino (5 = 1 semana, 21 = 1 mês)")
-    run_command.add_argument("--retrain", type=positive, default=CONFIG.retrain_every, help="retreina a cada k pregões")
+    run_command = commands.add_parser("run", help="walk-forward para uma combinação e relatório")
+    run_command.add_argument("--model", choices=list(MODELS), default=CONFIG.model)
+    run_command.add_argument("--scope", choices=list(SCOPES), default=CONFIG.scope,
+                             help="pooled = um modelo para todas as ações; per_stock = um modelo por ação")
+    run_command.add_argument("--window", type=positive, default=None,
+                             help="pregões de exemplos de treino (padrão: 21 em pooled, 252 em per_stock)")
+    run_command.add_argument("--retrain", type=positive, default=None,
+                             help="retreina a cada k pregões (padrão: 1 em pooled, 21 em per_stock)")
+    sweep_command = commands.add_parser("sweep", help="roda todas as combinações que ainda não existem")
+    sweep_command.add_argument("--models", nargs="+", choices=list(MODELS), default=[CONFIG.model])
+    sweep_command.add_argument("--scopes", nargs="+", choices=list(SCOPES), default=[CONFIG.scope])
+    sweep_command.add_argument("--windows", nargs="+", type=positive, default=[CONFIG.train_window_days])
+    sweep_command.add_argument("--retrain", nargs="+", type=positive, default=[CONFIG.retrain_every])
     args = parser.parse_args(argv)
     project = Project(CONFIG)
     try:
@@ -55,8 +83,13 @@ def main(argv: list[str] | None = None) -> None:
             dataset = project.build_features().dataset
             dates = dataset.index.get_level_values("date")
             print(f"Features: {len(dataset):,} linhas, {dates.min().date()} → {dates.max().date()}")
+        elif args.command == "sweep":
+            sweep(project, args.models, args.scopes, args.windows, args.retrain)
         else:
-            key = RunKey(args.window, args.retrain)
+            pooled = args.scope == "pooled"
+            key = RunKey(args.model, args.scope,
+                         args.window or (CONFIG.train_window_days if pooled else CONFIG.per_stock_window_days),
+                         args.retrain or (CONFIG.retrain_every if pooled else CONFIG.per_stock_retrain_every))
             run = project.run(key, progress=lambda done: print(f"\rtreinando {done:.0%}", end="", flush=True))
             print(f"\n{len(run.predictions):,} previsões em {run.info['runtime_minutes']} min")
             report(project, key)

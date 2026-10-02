@@ -24,23 +24,23 @@ def parts():
     return ticker_features, date_features, membership, close, fwd
 
 
-def test_rows_are_members_with_close_history_and_date_features(parts):
-    dataset = build_dataset(*parts, min_history_days=2)
+def test_rows_are_members_with_a_complete_recent_history_and_date_features(parts):
+    dataset = build_dataset(*parts, history_days=2)
     assert list(dataset.index) == [
-        (DATES[1], "A"), (DATES[2], "A"), (DATES[2], "B"), (DATES[2], "C"), (DATES[3], "B"), (DATES[3], "C"),
+        (DATES[1], "A"), (DATES[2], "A"), (DATES[2], "C"), (DATES[3], "B"), (DATES[3], "C"),
     ]
     assert dataset.index.names == ["date", "ticker"]
 
 
 def test_columns_and_values(parts):
-    dataset = build_dataset(*parts, min_history_days=2)
+    dataset = build_dataset(*parts, history_days=2)
     assert list(dataset.columns) == FEATURES + ["fwd_ret", "label"]
-    assert dataset.loc[(DATES[2], "B"), TICKER_FEATURES[0]] == 7.0
-    assert dataset.loc[(DATES[2], "B"), TICKER_FEATURES[3]] == 10.0
+    assert dataset.loc[(DATES[3], "B"), TICKER_FEATURES[0]] == 10.0
+    assert dataset.loc[(DATES[3], "B"), TICKER_FEATURES[3]] == 13.0
     assert dataset[FEATURES].dtypes.eq(np.float32).all()
 
 
 def test_label_is_positive_forward_return(parts):
-    dataset = build_dataset(*parts, min_history_days=2)
-    np.testing.assert_array_equal(dataset["fwd_ret"], [0.02, 0.0, np.nan, 0.03, np.nan, np.nan])
-    np.testing.assert_array_equal(dataset["label"], [1.0, 0.0, np.nan, 1.0, np.nan, np.nan])
+    dataset = build_dataset(*parts, history_days=2)
+    np.testing.assert_array_equal(dataset["fwd_ret"], [0.02, 0.0, 0.03, np.nan, np.nan])
+    np.testing.assert_array_equal(dataset["label"], [1.0, 0.0, 1.0, np.nan, np.nan])

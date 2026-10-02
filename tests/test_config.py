@@ -3,7 +3,7 @@ import dataclasses
 import pandas as pd
 import pytest
 
-from config.config import CONFIG, LGBM_PARAMS, TICKER_ALIASES
+from config.config import CONFIG, LGBM_PARAMS, MODEL_PARAMS, TICKER_ALIASES
 
 
 def test_config_is_frozen():
@@ -28,5 +28,8 @@ def test_backtest_period_and_model_defaults():
 
 
 def test_run_defaults():
-    assert (CONFIG.train_window_days, CONFIG.retrain_every) == (21, 1)
-    assert not hasattr(CONFIG, "horizon_days")
+    assert (CONFIG.model, CONFIG.scope, CONFIG.train_window_days, CONFIG.retrain_every) == ("lightgbm", "pooled", 21, 1)
+    assert (CONFIG.per_stock_window_days, CONFIG.per_stock_retrain_every, CONFIG.per_stock_min_rows) == (252, 21, 63)
+    assert (CONFIG.complete_history_days, CONFIG.selection_lookback_days, CONFIG.selection_step_days) == (252, 252, 63)
+    assert set(CONFIG.model_params) == set(MODEL_PARAMS) == {"lightgbm", "logistic", "random_forest", "extra_trees", "naive_bayes"}
+    assert CONFIG.model_params is not MODEL_PARAMS and CONFIG.model_params["lightgbm"]["min_child_floor"] == 20

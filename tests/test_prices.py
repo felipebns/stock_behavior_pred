@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from engine.prices import PRICE_FIELDS, PriceData, clean_prices, daily_total_return, forward_open_return
+from engine.prices import PRICE_FIELDS, PriceData, clean_prices, daily_total_return, forward_intraday_return
 
 DATES = ["2024-01-02", "2024-01-03", "2024-01-04"]
 
@@ -114,17 +114,17 @@ def test_daily_total_return_includes_dividends_and_bridges_gaps():
     assert r.loc[2, "B"] == pytest.approx(0.10)
 
 
-def test_forward_open_return_is_next_open_to_following_open():
-    open_ = pd.DataFrame({"A": [10.0, 11.0, 12.0, 13.0]})
-    dividends = pd.DataFrame({"A": [0.0, 0.0, 0.5, 0.0]})
-    fwd = forward_open_return(open_, dividends)
-    assert fwd.loc[0, "A"] == pytest.approx((12.0 + 0.5) / 11.0 - 1.0)
-    assert fwd.loc[1, "A"] == pytest.approx(13.0 / 12.0 - 1.0)
-    assert fwd.loc[2:, "A"].isna().all()
+def test_forward_intraday_return_is_next_open_to_next_close():
+    open_ = pd.DataFrame({"A": [10.0, 11.0, 12.0]})
+    close = pd.DataFrame({"A": [10.5, 11.55, 11.4]})
+    fwd = forward_intraday_return(open_, close)
+    assert fwd.loc[0, "A"] == pytest.approx(11.55 / 11.0 - 1.0)
+    assert fwd.loc[1, "A"] == pytest.approx(11.4 / 12.0 - 1.0)
+    assert np.isnan(fwd.loc[2, "A"])
 
 
-def test_forward_open_return_is_nan_when_entry_open_missing():
-    assert np.isnan(forward_open_return(pd.Series([10.0, np.nan, 12.0])).iloc[0])
+def test_forward_intraday_return_is_nan_when_a_price_is_missing():
+    assert np.isnan(forward_intraday_return(pd.Series([10.0, np.nan]), pd.Series([10.0, 11.0])).iloc[0])
 
 
 def test_save_and_load_roundtrip(tmp_path):

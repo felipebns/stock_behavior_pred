@@ -1,8 +1,10 @@
 """Synthetic market used by the tests: prices and constituents."""
+import copy
+
 import numpy as np
 import pandas as pd
 
-from config.config import Config
+from config.config import MODEL_PARAMS, Config
 from engine.project import RunKey
 
 BENCH = "^SP500TR"
@@ -64,10 +66,10 @@ def perturb_after(raw: dict, cutoff: pd.Timestamp, seed: int = 99) -> dict:
 SMALL_LGBM = {
     "n_estimators": 10, "learning_rate": 0.1, "num_leaves": 4, "subsample": 0.8, "subsample_freq": 1,
     "colsample_bytree": 0.8, "importance_type": "gain", "random_state": 0, "deterministic": True,
-    "force_col_wise": True, "n_jobs": 1, "verbose": -1,
+    "force_col_wise": True, "n_jobs": 1, "verbose": -1, "min_child_share": 0.004, "min_child_floor": 20,
 }
 
-RUNS = (RunKey(40), RunKey(40, 3))
+RUNS = (RunKey("lightgbm", "pooled", 40), RunKey("logistic", "per_stock", 40, 3))
 
 
 def synthetic_config(root, **overrides) -> Config:
@@ -77,7 +79,9 @@ def synthetic_config(root, **overrides) -> Config:
         "data_in": root / "in", "data_out": root / "out", "price_start": "2019-01-01",
         "backtest_start": str(start.date()), "train_window_days": 40, "retrain_every": 1,
         "peer_count": 3,
-        "peer_lookback_days": 21, "n_jobs": 1, "lgbm_params": SMALL_LGBM,
+        "peer_lookback_days": 21, "n_jobs": 1, "complete_history_days": 63, "per_stock_min_rows": 20,
+        "selection_lookback_days": 40, "selection_step_days": 20,
+        "model_params": {**copy.deepcopy(MODEL_PARAMS), "lightgbm": dict(SMALL_LGBM)},
     }
     return Config(**{**settings, **overrides})
 

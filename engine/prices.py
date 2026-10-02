@@ -100,7 +100,6 @@ def daily_total_return(close: pd.DataFrame, dividends: pd.DataFrame) -> pd.DataF
     return (close + dividends) / close.ffill().shift(1) - 1.0
 
 
-def forward_open_return(open_, dividends=None):
-    """Row t: buy at the open of t+1, sell at the open of t+2, keeping the dividend that goes ex on t+2."""
-    received = 0.0 if dividends is None else dividends.shift(-2)
-    return (open_.shift(-2) + received) / open_.shift(-1) - 1.0
+def forward_intraday_return(open_, close):
+    """Row t: buy at the open of t+1 and sell at the close of t+1 (a dividend going ex at t+1 is already out of that open)."""
+    return close.shift(-1) / open_.shift(-1) - 1.0

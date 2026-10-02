@@ -30,8 +30,25 @@ def test_expected_errors_print_a_message_instead_of_a_traceback(synthetic_projec
 def test_report_of_a_run_without_any_realized_day_says_so(tmp_path, capsys):
     raw = make_market()
     dates = sorted(raw["prices"]["date"].unique())
-    project = Project(synthetic_config(tmp_path, backtest_start=str(dates[-2].date())))
+    project = Project(synthetic_config(tmp_path, backtest_start=str(dates[-1].date())))
     project.build_features(Universe(raw["snapshots"]), PriceData(clean_prices(raw["prices"])))
-    project.run(RunKey(40))
-    main.report(project, RunKey(40))
+    project.run(RunKey("lightgbm", "pooled", 40))
+    main.report(project, RunKey("lightgbm", "pooled", 40))
     assert "Nenhum dia de carteira" in capsys.readouterr().out
+
+
+def test_run_options_choose_the_model_and_scope(capsys):
+    with pytest.raises(SystemExit):
+        main.main(["run", "--model", "xgboost"])
+    assert "invalid choice" in capsys.readouterr().err
+
+
+def test_sweep_runs_missing_combinations_and_skips_existing_ones(tmp_path, capsys):
+    raw = make_market()
+    project = Project(synthetic_config(tmp_path))
+    project.build_features(Universe(raw["snapshots"]), PriceData(clean_prices(raw["prices"])))
+    main.sweep(project, ["naive_bayes"], ["pooled", "per_stock"], [40], [5])
+    main.sweep(project, ["naive_bayes"], ["pooled"], [40, 400], [5])
+    out = capsys.readouterr().out
+    assert len(project.runs()) == 2
+    assert out.count("já existe") == 1 and "máximo" in out

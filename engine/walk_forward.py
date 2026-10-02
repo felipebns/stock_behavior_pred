@@ -1,13 +1,14 @@
-"""Walk-forward: after each close, predict the next day with a model fit only on labels already known; decision
-dates run in parallel."""
+"""Walk-forward: after each close, predict the next day's open-to-close move with a model fit only on labels already
+known; decision dates run in parallel."""
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed, effective_n_jobs
-from lightgbm import LGBMClassifier
 
-MODELS = {"lightgbm": LGBMClassifier}
+from engine.models import importance
+
+SCOPES = {"pooled": "um modelo para todas", "per_stock": "um modelo por ação"}
 
 
 @dataclass
@@ -17,27 +18,28 @@ class WalkForwardResult:
 
 
 class WalkForward:
-    """Row s's label needs the open of s+2, so a fit at decision t uses exactly the rows dated t-X-1 .. t-2; that model
-    also predicts the next retrain_every-1 decisions, all after t."""
+    """Row s's label (open to close of s+1) is known at the close of s+1, so a fit at decision t uses exactly the rows
+    dated t-X .. t-1; that fit also predicts the next retrain_every-1 decisions, all after t. "pooled" fits one model on
+    every stock's rows; "per_stock" fits one model per stock on its own rows."""
 
-    def __init__(self, train_window: int, params: dict, retrain_every: int = 1, min_child_share: float = 0.004,
-                 min_child_floor: int = 20, n_jobs: int = 1, model_class=LGBMClassifier):
+    def __init__(self, train_window: int, make_model, params: dict, retrain_every: int = 1, scope: str = "pooled",
+                 min_stock_rows: int = 63, n_jobs: int = 1):
         self.train_window = train_window
+        self.make_model = make_model
         self.params = params
         self.retrain_every = retrain_every
-        self.min_child_share = min_child_share
-        self.min_child_floor = min_child_floor
+        self.scope = scope
+        self.min_stock_rows = min_stock_rows
         self.n_jobs = n_jobs
-        self.model_class = model_class
 
     def decisions(self, row_pos: np.ndarray, calendar: pd.DatetimeIndex, start=None) -> np.ndarray:
-        first = row_pos[0] + self.train_window + 1
+        first = row_pos[0] + self.train_window
         begin = first if start is None else calendar.searchsorted(pd.Timestamp(start))
         if begin < first:
-            room = begin - row_pos[0] - 1
+            room = begin - row_pos[0]
             if room < 1:
                 raise ValueError(f"não há pregões de dados antes de {pd.Timestamp(start).date()} para treinar")
-            raise ValueError(f"a janela de {self.train_window} pregões precisa de {self.train_window + 1} pregões de dados "
+            raise ValueError(f"a janela de {self.train_window} pregões precisa de {self.train_window} pregões de dados "
                              f"antes de {pd.Timestamp(start).date()}; o máximo é {room}")
         decisions = np.unique(row_pos)
         decisions = decisions[decisions >= begin]
@@ -48,55 +50,66 @@ class WalkForward:
     def run(self, dataset: pd.DataFrame, features: list[str], calendar: pd.DatetimeIndex, start=None,
             progress=None) -> WalkForwardResult:
         row_pos = calendar.get_indexer(dataset.index.get_level_values("date"))
+        stocks = pd.factorize(dataset.index.get_level_values("ticker"))[0]
         X = dataset[features].to_numpy(dtype=np.float32)
         y = dataset["label"].to_numpy(dtype=float)
         decisions = self.decisions(row_pos, calendar, start)
         fits = [decisions[i:i + self.retrain_every] for i in range(0, len(decisions), self.retrain_every)]
         blocks = np.array_split(np.arange(len(fits)), min(len(fits), 4 * effective_n_jobs(self.n_jobs)))
-        jobs = (delayed(_fit_block)(X, y, row_pos, [fits[i] for i in block], self.train_window, self.params,
-                                    self.min_child_share, self.min_child_floor, self.model_class) for block in blocks)
-        results = []
-        for done, result in enumerate(Parallel(n_jobs=self.n_jobs, return_as="generator")(jobs), start=1):
-            results.append(result)
+        jobs = (delayed(_fit_block)(X, y, row_pos, stocks, [fits[i] for i in block], self.train_window, self.make_model,
+                                    self.params, self.scope, self.min_stock_rows) for block in blocks)
+        prob = np.full(len(dataset), np.nan)
+        gains = []
+        for done, (rows, probs, block_gains) in enumerate(Parallel(n_jobs=self.n_jobs, return_as="generator")(jobs), start=1):
+            prob[rows] = probs
+            gains.append(block_gains)
             if progress is not None:
                 progress(done / len(blocks))
-        rows = dataset[np.isin(row_pos, decisions)]
+        decided = np.flatnonzero(np.isin(row_pos, decisions))
         predictions = pd.DataFrame({
-            "date": rows.index.get_level_values("date"),
-            "ticker": rows.index.get_level_values("ticker"),
-            "prob": np.concatenate([probs for probs, _ in results]),
-            "fwd_ret": rows["fwd_ret"].to_numpy(),
-            "label": rows["label"].to_numpy(),
+            "date": dataset.index.get_level_values("date")[decided],
+            "ticker": dataset.index.get_level_values("ticker")[decided],
+            "prob": prob[decided],
+            "fwd_ret": dataset["fwd_ret"].to_numpy()[decided],
+            "label": y[decided],
         })
-        importance = pd.DataFrame(np.vstack([gains for _, gains in results]),
-                                  index=pd.DatetimeIndex(calendar[[group[0] for group in fits]], name="date"),
-                                  columns=features)
-        return WalkForwardResult(predictions, importance)
+        importance_ = pd.DataFrame(np.vstack(gains), index=pd.DatetimeIndex(calendar[[group[0] for group in fits]], name="date"),
+                                   columns=features)
+        return WalkForwardResult(predictions, importance_)
 
 
-def _fit(X, y, params, min_child_share, min_child_floor, model_class):
-    """A function giving P(up) for new rows, and the normalized gains. A window with a single class (say X = 1 on a
-    day every stock fell) predicts that class's frequency: a classifier fit on one class would put it in the wrong
-    column."""
-    if len(np.unique(y)) < 2:
+def _fit(X, y, make_model, params, min_rows=1):
+    """P(up) for new rows and the normalized importance. Fewer than min_rows examples or a single class predict the
+    up-frequency of those examples (0.5 with none): a classifier fit on one class would put it in the wrong column."""
+    if len(y) < min_rows or len(np.unique(y)) < 2:
         constant = float(y.mean()) if len(y) else 0.5
         return (lambda rows: np.full(len(rows), constant)), np.zeros(X.shape[1])
-    model = model_class(**params, min_child_samples=max(min_child_floor, round(min_child_share * len(y))))
-    model.fit(X, y)
-    gain = np.asarray(model.feature_importances_, dtype=float)
-    return (lambda rows: model.predict_proba(rows)[:, 1]), (gain / gain.sum() if gain.sum() > 0 else gain)
+    model = make_model(params, len(y)).fit(X, y.astype(int))
+    return (lambda rows: model.predict_proba(rows)[:, 1]), importance(model, X.shape[1])
 
 
-def _fit_block(X, y, row_pos, fits, window, params, min_child_share, min_child_floor, model_class):
-    probs, gains = [], []
+def _fit_block(X, y, row_pos, stocks, fits, window, make_model, params, scope, min_stock_rows):
+    rows_out, probs_out, gains = [], [], []
     for group in fits:
-        lo = np.searchsorted(row_pos, group[0] - window - 1, side="left")
-        hi = np.searchsorted(row_pos, group[0] - 2, side="right")
-        known = ~np.isnan(y[lo:hi])
-        predict, gain = _fit(X[lo:hi][known], y[lo:hi][known].astype(int), params, min_child_share, min_child_floor,
-                             model_class)
-        for t in group:
-            first, last = np.searchsorted(row_pos, t, side="left"), np.searchsorted(row_pos, t, side="right")
-            probs.append(predict(X[first:last]))
-        gains.append(gain)
-    return np.concatenate(probs), np.vstack(gains)
+        train = np.arange(np.searchsorted(row_pos, group[0] - window, side="left"),
+                          np.searchsorted(row_pos, group[0] - 1, side="right"))
+        train = train[~np.isnan(y[train])]
+        target = np.arange(np.searchsorted(row_pos, group[0], side="left"), np.searchsorted(row_pos, group[-1], side="right"))
+        if scope == "pooled":
+            predict, gain = _fit(X[train], y[train], make_model, params)
+            rows_out.append(target)
+            probs_out.append(predict(X[target]))
+            gains.append(gain)
+            continue
+        order = train[np.argsort(stocks[train], kind="stable")]
+        sorted_stocks = stocks[order]
+        stock_gains = []
+        for stock in np.unique(stocks[target]):
+            mine = order[np.searchsorted(sorted_stocks, stock, side="left"):np.searchsorted(sorted_stocks, stock, side="right")]
+            predict, gain = _fit(X[mine], y[mine], make_model, params, min_stock_rows)
+            rows = target[stocks[target] == stock]
+            rows_out.append(rows)
+            probs_out.append(predict(X[rows]))
+            stock_gains.append(gain)
+        gains.append(np.mean(stock_gains, axis=0))
+    return np.concatenate(rows_out), np.concatenate(probs_out), np.vstack(gains)

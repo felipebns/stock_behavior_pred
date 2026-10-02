@@ -1,3 +1,4 @@
+import copy
 import dataclasses
 import json
 import re
@@ -60,10 +61,15 @@ def test_decisions_start_at_backtest_start_and_happen_every_session(synthetic_pr
     assert set(np.diff(positions)) == {1}
 
 
-def test_labels_say_whether_the_stock_went_up(synthetic_project):
+def test_labels_say_whether_the_stock_went_up_during_the_next_day(synthetic_project):
     known = synthetic_project.load_run(RUNS[0]).predictions.dropna(subset=["label"])
     assert (known["label"] == (known["fwd_ret"] > 0)).all()
-    assert 0.3 < known["label"].mean() < 0.7
+    prices = make_market()["prices"].set_index(["date", "ticker"])
+    calendar = synthetic_project.features(with_dataset=False).calendar
+    row = known.iloc[len(known) // 2]
+    next_day = calendar[calendar.get_loc(row["date"]) + 1]
+    bar = prices.loc[(next_day, row["ticker"])]
+    assert row["fwd_ret"] == pytest.approx(bar["close"] / bar["open"] - 1)
 
 
 def test_features_are_saved_with_every_column(synthetic_project):
@@ -79,9 +85,9 @@ def test_runs_are_saved_per_key_and_listed(synthetic_project):
     run = synthetic_project.load_run(RUNS[1])
     assert run.info["key"] == dataclasses.asdict(RUNS[1])
     assert list(run.importance.columns) == FEATURES
-    assert (synthetic_project.runs_dir / "lightgbm-w40-k3" / "run_info.json").exists()
-    assert synthetic_project.stamp(RUNS[1]) > 0 and synthetic_project.stamp(RunKey(21)) == 0
-    assert RUNS[1].label == "janela 40 · retreino a cada 3"
+    assert (synthetic_project.runs_dir / "logistic-per_stock-w40-k3" / "run_info.json").exists()
+    assert synthetic_project.stamp(RUNS[1]) > 0 and synthetic_project.stamp(RunKey("lightgbm", "pooled", 21)) == 0
+    assert RUNS[1].label == "Logística regularizada · um modelo por ação · janela 40 · retreino a cada 3"
 
 
 def test_rebuilding_features_deletes_old_runs(tmp_path):
@@ -95,7 +101,7 @@ def test_rebuilding_features_deletes_old_runs(tmp_path):
 
 def test_window_too_long_is_refused(synthetic_project):
     with pytest.raises(ValueError, match="máximo"):
-        synthetic_project.run(RunKey(100))
+        synthetic_project.run(RunKey("lightgbm", "pooled", 100))
     assert synthetic_project.runs() == list(RUNS)
 
 
@@ -110,15 +116,25 @@ def test_features_saved_in_an_older_format_are_rebuilt(tmp_path):
     assert project.features(with_dataset=False).quality["settings"]["format"] == FEATURES_FORMAT
 
 
-def test_runs_made_with_other_training_settings_are_hidden(synthetic_project):
-    assert Project(dataclasses.replace(synthetic_project.config, min_child_floor=5)).runs() == []
+def test_changing_a_models_parameters_hides_only_its_runs(synthetic_project):
+    params = copy.deepcopy(synthetic_project.config.model_params)
+    params["logistic"]["C"] = 0.5
+    assert Project(dataclasses.replace(synthetic_project.config, model_params=params)).runs() == [RUNS[0]]
+    assert Project(dataclasses.replace(synthetic_project.config, per_stock_min_rows=5)).runs() == []
     assert synthetic_project.runs() == list(RUNS)
+
+
+def test_an_unknown_model_or_scope_is_refused():
+    with pytest.raises(ValueError, match="modelo"):
+        RunKey("xgboost", "pooled", 21)
+    with pytest.raises(ValueError, match="escopo"):
+        RunKey("lightgbm", "sector", 21)
 
 
 def test_a_run_saved_after_its_features_were_replaced_is_hidden(tmp_path):
     raw = make_market()
     project = build(raw, tmp_path)
-    stale = project.run(RunKey(5))
+    stale = project.run(RunKey("lightgbm", "pooled", 5))
     project.build_features(Universe(raw["snapshots"]), PriceData(clean_prices(raw["prices"])))
     project.save_run(stale)
     assert project.runs() == []
@@ -127,13 +143,14 @@ def test_a_run_saved_after_its_features_were_replaced_is_hidden(tmp_path):
 def test_market_frame_aligns_benchmark_and_risk_free(synthetic_project):
     market = synthetic_project.features(with_dataset=False).market
     prices = make_market()["prices"]
-    bench_open = prices[prices["ticker"] == BENCH].set_index("date")["open"]
+    bench = prices[prices["ticker"] == BENCH].set_index("date")
     irx = prices[prices["ticker"] == RF].set_index("date")["close"]
     calendar, t = market.index, market.index[100]
     assert market.loc[t, "holding_date"] == calendar[101]
-    assert market.loc[t, "bench_fwd_ret"] == pytest.approx(bench_open[calendar[102]] / bench_open[calendar[101]] - 1)
+    assert market.loc[t, "bench_fwd_ret"] == pytest.approx(bench["close"][calendar[101]] / bench["open"][calendar[101]] - 1)
     assert market.loc[t, "rf_daily"] == pytest.approx(irx[t] / 100 / 252)
-    assert pd.isna(market["holding_date"].iloc[-1]) and pd.isna(market["bench_fwd_ret"].iloc[-2])
+    assert pd.isna(market["holding_date"].iloc[-1]) and pd.isna(market["bench_fwd_ret"].iloc[-1])
+    assert pd.notna(market["bench_fwd_ret"].iloc[-2])
 
 
 def test_quality_reports_members_without_usable_history(tmp_path):
@@ -154,8 +171,8 @@ def test_quality_reports_members_without_usable_history(tmp_path):
 
 def test_download_saves_inputs_and_clears_derived_results(tmp_path):
     project = Project(synthetic_config(tmp_path))
-    (project.runs_dir / "lightgbm-w21-k1").mkdir(parents=True)
-    (project.runs_dir / "lightgbm-w21-k1" / "run_info.json").write_text("{}")
+    (project.runs_dir / "lightgbm-pooled-w21-k1").mkdir(parents=True)
+    (project.runs_dir / "lightgbm-pooled-w21-k1" / "run_info.json").write_text("{}")
     failed = project.download(
         price_downloader=lambda tickers, **kwargs: yahoo_response(tickers, ["2024-01-02", "2024-01-03"], skip={"GONE"}),
         fetch=lambda url: CONSTITUENTS,
@@ -201,8 +218,8 @@ def test_features_are_rebuilt_when_their_settings_change(tmp_path):
     built = project.stamp()
     Project(synthetic_config(tmp_path)).features(with_dataset=False)
     assert project.stamp() == built
-    (project.runs_dir / "lightgbm-w40-k1").mkdir(parents=True)
-    (project.runs_dir / "lightgbm-w40-k1" / "run_info.json").write_text("{}")
+    (project.runs_dir / "lightgbm-pooled-w40-k1").mkdir(parents=True)
+    (project.runs_dir / "lightgbm-pooled-w40-k1" / "run_info.json").write_text("{}")
     quality = Project(synthetic_config(tmp_path, peer_count=2)).features(with_dataset=False).quality
     assert quality["settings"]["peer_count"] == 2
     assert project.stamp() != built and not project.runs_dir.exists()

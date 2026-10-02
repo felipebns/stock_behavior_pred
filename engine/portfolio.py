@@ -1,4 +1,5 @@
-"""Long-only daily portfolio built from the probabilities predicted after each close."""
+"""Long-only intraday portfolio: after each close, buy at the next open the stocks with prob > threshold (weights ∝ prob)
+and sell them at that day's close."""
 from dataclasses import dataclass
 
 import pandas as pd
@@ -27,7 +28,9 @@ class Portfolio:
         return chosen
 
     def backtest(self, predictions: pd.DataFrame, market: pd.DataFrame) -> BacktestResult:
-        """A held stock without a realized return (delisting, halt) counts as 0: dropping it would use future information."""
+        """Every invested day buys at the open and sells at the close, paying the fee on both trades:
+        net = (1 + gross)(1 - fee)² - 1. A held stock without a return that day (delisting, halt) counts as 0: dropping
+        it would use future information."""
         window = market.loc[predictions["date"].min():predictions["date"].max()]
         last_realized = window["bench_fwd_ret"].last_valid_index()
         window = window.iloc[:0] if last_realized is None else window.loc[:last_realized]
@@ -47,8 +50,9 @@ class Portfolio:
         invested = n_positions > 0
         stock_return = by_date["contribution"].sum().reindex(dates, fill_value=0.0)
         gross = stock_return.where(invested, window["rf_daily"])
-        turnover = self._turnover(chosen, dates, stock_return)
-        cost = turnover * self.cost_bps / 10_000.0
+        fee = self.cost_bps / 10_000.0
+        turnover = 2.0 * invested.astype(float)
+        cost = invested * (1.0 - (1.0 - fee) ** 2)
         daily = pd.DataFrame({
             "decision_date": dates.to_numpy(),
             "gross": gross.to_numpy(),
@@ -64,11 +68,3 @@ class Portfolio:
         positions = chosen.rename(columns={"date": "decision_date"})
         positions["holding_date"] = positions["decision_date"].map(window["holding_date"])
         return BacktestResult(daily=daily, positions=positions[POSITION_COLUMNS].reset_index(drop=True))
-
-    @staticmethod
-    def _turnover(chosen: pd.DataFrame, dates: pd.DatetimeIndex, stock_return: pd.Series) -> pd.Series:
-        """Buys + sells at each open (Σ|Δw|): target weights vs yesterday's weights after they drifted with prices."""
-        weights = chosen.pivot(index="date", columns="ticker", values="weight").reindex(dates).fillna(0.0)
-        growth = 1.0 + chosen.pivot(index="date", columns="ticker", values="fwd_ret").reindex(dates).fillna(0.0)
-        drifted = (weights * growth).div(1.0 + stock_return, axis=0)
-        return (weights - drifted.shift(1).fillna(0.0)).abs().sum(axis=1)

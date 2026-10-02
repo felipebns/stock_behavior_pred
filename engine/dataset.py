@@ -6,13 +6,15 @@ from engine.features import DATE_FEATURES, FEATURES, TICKER_FEATURES
 
 
 def build_dataset(ticker_features: dict[str, pd.DataFrame], date_features: pd.DataFrame, membership: pd.DataFrame,
-                  close: pd.DataFrame, fwd_ret: pd.DataFrame, min_history_days: int) -> pd.DataFrame:
-    """A row per stock that, on that date, is in the index, traded, has enough history and all date features."""
-    has_close = close.notna().to_numpy()
+                  close: pd.DataFrame, fwd_ret: pd.DataFrame, history_days: int) -> pd.DataFrame:
+    """A row per stock that, on that date, is in the index, has a close on each of the last history_days sessions
+    (that date included) and all date features: a gap or a recent listing keeps it out until the window is complete."""
+    counts = np.cumsum(close.notna().to_numpy(), axis=0)
+    previous = np.zeros_like(counts)
+    previous[history_days:] = counts[:-history_days]
     eligible = (
         membership.to_numpy()
-        & has_close
-        & (np.cumsum(has_close, axis=0) >= min_history_days)
+        & (counts - previous >= history_days)
         & date_features[DATE_FEATURES].notna().all(axis=1).to_numpy()[:, None]
     )
     rows, cols = np.nonzero(eligible)

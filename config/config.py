@@ -1,3 +1,4 @@
+import copy
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -34,6 +35,18 @@ LGBM_PARAMS: dict = {
 }
 
 
+# Default parameters per model (tuning starts here). sklearn models get median imputation; the logistic also standardization.
+MODEL_PARAMS: dict[str, dict] = {
+    "lightgbm": {**LGBM_PARAMS, "min_child_share": 0.004, "min_child_floor": 20},
+    "logistic": {"C": 1.0, "max_iter": 1000},
+    "random_forest": {"n_estimators": 100, "max_depth": 6, "min_samples_leaf": 20, "max_features": "sqrt",
+                      "random_state": 42, "n_jobs": 1},
+    "extra_trees": {"n_estimators": 100, "max_depth": 6, "min_samples_leaf": 20, "max_features": "sqrt",
+                    "random_state": 42, "n_jobs": 1},
+    "naive_bayes": {},
+}
+
+
 @dataclass(frozen=True)
 class Config:
     data_in: Path = Path("data/in")
@@ -47,16 +60,21 @@ class Config:
     risk_free_ticker: str = "^IRX"
     train_window_days: int = 21
     retrain_every: int = 1
+    model: str = "lightgbm"
+    scope: str = "pooled"
+    per_stock_window_days: int = 252
+    per_stock_retrain_every: int = 21
+    per_stock_min_rows: int = 63
+    selection_lookback_days: int = 252
+    selection_step_days: int = 63
     threshold: float = 0.55
     cost_bps: float = 5.0
-    min_history_days: int = 63
+    complete_history_days: int = 252
     peer_count: int = 10
     peer_lookback_days: int = 63
-    min_child_share: float = 0.004
-    min_child_floor: int = 20
     risk_free_max_staleness_days: int = 5
     n_jobs: int = -1
-    lgbm_params: dict = field(default_factory=lambda: dict(LGBM_PARAMS))
+    model_params: dict = field(default_factory=lambda: copy.deepcopy(MODEL_PARAMS))
 
 
 CONFIG = Config()

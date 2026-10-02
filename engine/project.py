@@ -14,32 +14,41 @@ import pandas as pd
 from config.config import REASSIGNED_TICKERS, TICKER_ALIASES, Config
 from engine.dataset import build_dataset
 from engine.features import FEATURES, FeatureBuilder
-from engine.prices import PriceData, daily_total_return, forward_open_return
+from engine.prices import PriceData, daily_total_return, forward_intraday_return
 from engine.universe import Universe
-from engine.walk_forward import MODELS, WalkForward
+from engine.models import MODELS
+from engine.walk_forward import SCOPES, WalkForward
 
 PACKAGES = ("pandas", "numpy", "lightgbm", "scikit-learn", "joblib", "yfinance", "streamlit")
 # Config fields that decide what is saved: features or runs made with other values are not reused.
-FEATURE_SETTINGS = ("price_start", "benchmark_ticker", "risk_free_ticker", "min_history_days", "peer_count",
+FEATURE_SETTINGS = ("price_start", "benchmark_ticker", "risk_free_ticker", "complete_history_days", "peer_count",
                     "peer_lookback_days", "risk_free_max_staleness_days")
-RUN_SETTINGS = ("backtest_start", "min_child_share", "min_child_floor", "lgbm_params")
-FEATURES_FORMAT = 3  # bump when the saved features change shape: features saved in another format are rebuilt
+RUN_SETTINGS = ("backtest_start", "per_stock_min_rows")
+FEATURES_FORMAT = 4  # bump when the saved features change shape: features saved in another format are rebuilt
 
 
 @dataclass(frozen=True, order=True)
 class RunKey:
-    """A run: train on the last `window` sessions of rows, refit every `retrain_every` sessions."""
+    """A run: which model, one model for all stocks or one per stock, the last `window` sessions of examples, and a
+    refit every `retrain_every` sessions."""
+    model: str
+    scope: str
     window: int
     retrain_every: int = 1
-    model: str = "lightgbm"
+
+    def __post_init__(self):
+        if self.model not in MODELS:
+            raise ValueError(f"modelo desconhecido: {self.model} (opções: {', '.join(MODELS)})")
+        if self.scope not in SCOPES:
+            raise ValueError(f"escopo desconhecido: {self.scope} (opções: {', '.join(SCOPES)})")
 
     @property
     def name(self) -> str:
-        return f"{self.model}-w{self.window}-k{self.retrain_every}"
+        return f"{self.model}-{self.scope}-w{self.window}-k{self.retrain_every}"
 
     @property
     def label(self) -> str:
-        return f"janela {self.window} · retreino a cada {self.retrain_every}"
+        return f"{MODELS[self.model][0]} · {SCOPES[self.scope]} · janela {self.window} · retreino a cada {self.retrain_every}"
 
 
 @dataclass
@@ -117,9 +126,8 @@ class Project:
         c = self.config
         features = self.features()
         started = time.perf_counter()
-        walk_forward = WalkForward(key.window, c.lgbm_params, retrain_every=key.retrain_every,
-                                   min_child_share=c.min_child_share, min_child_floor=c.min_child_floor,
-                                   n_jobs=c.n_jobs, model_class=MODELS[key.model])
+        walk_forward = WalkForward(key.window, MODELS[key.model][1], c.model_params[key.model], key.retrain_every,
+                                   key.scope, c.per_stock_min_rows, c.n_jobs)
         result = walk_forward.run(features.dataset, FEATURES, features.calendar, start=c.backtest_start, progress=progress)
         results = RunResults(key, result.predictions, result.importance, info={
             "key": dataclasses.asdict(key),
@@ -130,6 +138,7 @@ class Project:
             "versions": {package: version(package) for package in PACKAGES},
             "config": dataclasses.asdict(c),
             "settings": self._settings(RUN_SETTINGS),
+            "params": self._model_params(key.model),
             "features_built_at": features.quality["built_at"],
         })
         self.save_run(results)
@@ -148,16 +157,21 @@ class Project:
                           pd.read_parquet(folder / "importance.parquet"), json.loads((folder / "run_info.json").read_text()))
 
     def runs(self) -> list[RunKey]:
-        """Runs made with the current settings on the current features; any other run is stale."""
+        """Runs made on the current features with the current settings and their model's current parameters."""
         quality = self._current_quality()
         if quality is None:
             return []
-        expected = {"settings": self._settings(RUN_SETTINGS), "features_built_at": quality["built_at"]}
+        settings = self._settings(RUN_SETTINGS)
         keys = []
         for path in self.runs_dir.glob("*/run_info.json"):
             info = json.loads(path.read_text())
-            if "key" in info and all(info.get(name) == value for name, value in expected.items()):
-                keys.append(RunKey(**info["key"]))
+            try:
+                key = RunKey(**info["key"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if (info.get("settings") == settings and info.get("features_built_at") == quality["built_at"]
+                    and info.get("params") == self._model_params(key.model)):
+                keys.append(key)
         return sorted(keys)
 
     def stamp(self, key: RunKey | None = None) -> int:
@@ -168,6 +182,9 @@ class Project:
     def _settings(self, names: tuple[str, ...]) -> dict:
         """Those config values as they read back from JSON, so saved and current settings compare equal."""
         return json.loads(json.dumps({name: getattr(self.config, name) for name in names}))
+
+    def _model_params(self, model: str) -> dict:
+        return json.loads(json.dumps(self.config.model_params[model]))
 
     def _feature_settings(self) -> dict:
         return {"format": FEATURES_FORMAT, **self._settings(FEATURE_SETTINGS)}
@@ -200,10 +217,11 @@ class Project:
         ticker_features, date_features = FeatureBuilder(c.peer_count, c.peer_lookback_days).build(
             panel, prices.series(c.benchmark_ticker, "close", calendar), membership)
         dataset = build_dataset(ticker_features, date_features, membership, panel.close,
-                                forward_open_return(panel.open, panel.dividends), c.min_history_days)
+                                forward_intraday_return(panel.open, panel.close), c.complete_history_days)
         market = pd.DataFrame({
             "holding_date": pd.Series(calendar, index=calendar).shift(-1),
-            "bench_fwd_ret": forward_open_return(prices.series(c.benchmark_ticker, "open", calendar)),
+            "bench_fwd_ret": forward_intraday_return(prices.series(c.benchmark_ticker, "open", calendar),
+                                                    prices.series(c.benchmark_ticker, "close", calendar)),
             "rf_daily": prices.series(c.risk_free_ticker, "close", calendar)
                               .ffill(limit=c.risk_free_max_staleness_days) / 100.0 / 252.0,
         }, index=calendar).rename_axis("decision_date")

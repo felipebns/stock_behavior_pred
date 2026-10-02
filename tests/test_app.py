@@ -12,15 +12,18 @@ from engine.project import Project, RunKey, RunResults
 from engine.universe import Universe
 
 APP = Path(__file__).resolve().parent.parent / "app" / "dashboard.py"
-TABS = ["Visão geral", "Previsto vs realizado", "Carteira por dia", "Recortes de período", "Runs", "Modelo"]
+TABS = ["Visão geral", "Previsto vs realizado", "Carteira por dia", "Recortes de período", "Runs", "Walk-forward", "Modelo"]
 
 
 def open_app(project: Project, monkeypatch, key: RunKey = RUNS[0]) -> AppTest:
-    """The app with the project's own config and the run key typed in the sidebar."""
+    """The app with the project's own config and the run key chosen in the sidebar."""
     monkeypatch.setattr("config.config.CONFIG", project.config)
     at = AppTest.from_file(str(APP), default_timeout=120).run()
-    for field, value in zip(at.sidebar.number_input, (key.window, key.retrain_every)):
-        field.set_value(value)
+    at.selectbox(key="model").set_value(key.model)
+    at.radio(key="scope").set_value(key.scope)
+    at.run()
+    at.number_input(key=f"window_{key.scope}").set_value(key.window)
+    at.number_input(key=f"retrain_{key.scope}").set_value(key.retrain_every)
     return at.run()
 
 
@@ -44,7 +47,7 @@ def test_dashboard_survives_threshold_nobody_passes(synthetic_project, monkeypat
 
 
 def test_run_not_made_yet_offers_the_button(synthetic_project, monkeypatch):
-    key = RunKey(21)
+    key = RunKey("lightgbm", "pooled", 21)
     at = open_app(synthetic_project, monkeypatch, key)
     assert not at.exception
     assert f"Rodar {key.label}" in [button.label for button in at.sidebar.button]
@@ -102,7 +105,7 @@ def test_day_tab_shows_what_was_bought_and_what_happened(synthetic_project, monk
     result = backtest(synthetic_project, key)
     days = list(result.daily.index)
     at = open_app(synthetic_project, monkeypatch, key)
-    at.selectbox[0].set_value(days.index(result.positions["holding_date"].iloc[-1])).run()
+    at.selectbox(key="day").set_value(days.index(result.positions["holding_date"].iloc[-1])).run()
     held = next(frame.value for frame in at.dataframe if "Subiu?" in frame.value.columns)
     assert {"Prob. prevista", "Retorno realizado", "Contribuição"} <= set(held.columns)
     assert any("Soma das contribuições" in info.value for info in at.info)
@@ -117,9 +120,16 @@ def test_runs_tab_compares_every_run(synthetic_project, monkeypatch):
 def test_run_without_any_realized_day_shows_a_warning(tmp_path, monkeypatch):
     raw = make_market()
     dates = sorted(raw["prices"]["date"].unique())
-    project = Project(synthetic_config(tmp_path, backtest_start=str(dates[-2].date())))
+    project = Project(synthetic_config(tmp_path, backtest_start=str(dates[-1].date())))
     project.build_features(Universe(raw["snapshots"]), PriceData(clean_prices(raw["prices"])))
-    project.run(RunKey(40))
-    at = open_app(project, monkeypatch, RunKey(40))
+    project.run(RunKey("lightgbm", "pooled", 40))
+    at = open_app(project, monkeypatch, RunKey("lightgbm", "pooled", 40))
     assert not at.exception
     assert any("Nenhum dia de carteira" in warning.value for warning in at.warning)
+
+
+def test_walk_forward_tab_shows_the_choices(synthetic_project, monkeypatch):
+    at = open_app(synthetic_project, monkeypatch)
+    choices = next(frame.value for frame in at.dataframe if "Limiar" in frame.value.columns and "Início" in frame.value.columns)
+    assert {"Início", "Run", "Limiar", "Sharpe no período anterior", "Dias"} <= set(choices.columns)
+    assert set(choices["Run"]) <= {key.label for key in RUNS}
